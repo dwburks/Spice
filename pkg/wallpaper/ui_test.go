@@ -434,20 +434,56 @@ func TestCreateTrayMenu_EmptyMonitors_DoesNotPanic(t *testing.T) {
 	assert.Empty(t, s.Items)
 }
 
-func TestCreateTrayMenu_SingleTray_PrimaryRootOthersSubmenus(t *testing.T) {
+func TestCreateTrayMenu_SingleTray_AllDisplaysRootEverySubmenu(t *testing.T) {
 	wp, _, _ := newTrayTestPlugin(t, false, image.Point{})
 	s := wp.CreateTrayMenu()
 	assert.NotEmpty(t, s.Items)
-	assert.Equal(t, "Display 1 (Built-in)", s.Items[0].Label)
-	assert.True(t, s.Items[0].IsDisabled)
-	subs := 0
+
+	// Top level: all-display actions first, no per-display header row.
+	assert.Equal(t, "Next Wallpaper", s.Items[0].Label)
+	assert.Equal(t, "Prev Wallpaper", s.Items[1].Label)
+	assert.NotNil(t, s.Items[0].Action)
+	for _, it := range s.Items {
+		assert.False(t, it.IsDisabled, "no disabled display header at the top level: %q", it.Label)
+		assert.NotEqual(t, "Delete And Block", it.Label, "per-image actions belong in the display submenus")
+	}
+
+	// Every display gets a submenu, primary first.
+	var subs []string
 	for _, it := range s.Items {
 		if it.SubMenu != nil {
-			subs++
-			assert.Equal(t, "Display 2 (Studio)", it.Label)
+			subs = append(subs, it.Label)
+			labels := make([]string, 0, len(it.SubMenu.Items))
+			for _, sub := range it.SubMenu.Items {
+				labels = append(labels, sub.Label)
+			}
+			assert.Contains(t, labels, "Next Wallpaper")
+			assert.Contains(t, labels, "Delete And Block")
 		}
 	}
-	assert.Equal(t, 1, subs)
+	assert.Equal(t, []string{"Display 1 (Built-in)", "Display 2 (Studio)"}, subs)
+}
+
+func TestCreateTrayMenu_SingleTray_AllDisplaysPauseLabelFollowsFirstMonitor(t *testing.T) {
+	wp, _, _ := newTrayTestPlugin(t, false, image.Point{})
+	hasLabel := func(want string) bool {
+		for _, it := range wp.CreateTrayMenu().Items {
+			if it.SubMenu == nil && it.Label == want {
+				return true
+			}
+		}
+		return false
+	}
+
+	assert.True(t, hasLabel("Pause Play"))
+
+	// The global toggle keys off monitor 0, so the label must too.
+	wp.Monitors[0].State.Paused = true
+	assert.True(t, hasLabel("Resume Play"))
+
+	wp.Monitors[0].State.Paused = false
+	wp.Monitors[1].State.Paused = true
+	assert.True(t, hasLabel("Pause Play"))
 }
 
 func TestCreateTrayMenu_SingleMonitor_NoHeaderRow(t *testing.T) {

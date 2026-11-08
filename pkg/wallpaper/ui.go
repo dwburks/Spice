@@ -270,20 +270,19 @@ func (wp *Plugin) CreateTrayMenu() *schema.MenuSchema {
 	perScreen := wp.hasPerScreenTray()
 	rootID, submenuMonitors := PlanTrayMonitors(monitors, perScreen, int(wp.activeTrayMonitorID.Load()))
 
-	if root, ok := byID[rootID]; ok {
-		if len(snaps) > 1 {
-			items = append(items, schema.MenuItemSchema{
-				Label:      root.displayName,
-				IconName:   "display.png",
-				IsDisabled: true,
-			})
-		}
-		items = append(items, createMonitorItems(root, perScreen)...)
-	}
-
-	if len(submenuMonitors) > 0 {
+	// Single-tray multi-monitor (Windows, Linux, single-tray macOS): the top
+	// level acts on every display, mirroring the Global hotkeys, and each
+	// display (primary first) gets its own submenu with its per-image items.
+	if !perScreen && len(snaps) > 1 {
+		items = append(items, wp.createAllDisplaysItems(snaps[0].paused)...)
 		items = append(items, schema.MenuItemSchema{IsSeparator: true})
-		for _, m := range submenuMonitors {
+
+		ordered := make([]Monitor, 0, len(snaps))
+		if _, ok := byID[rootID]; ok {
+			ordered = append(ordered, byID[rootID].mon)
+		}
+		ordered = append(ordered, submenuMonitors...)
+		for _, m := range ordered {
 			snap, ok := byID[m.ID]
 			if !ok {
 				continue
@@ -297,12 +296,66 @@ func (wp *Plugin) CreateTrayMenu() *schema.MenuSchema {
 				},
 			})
 		}
+
+		utilLog.Debugf("Finished Generating Tray Menu Schema for %d monitors.", len(snaps))
+		return &schema.MenuSchema{Items: items}
+	}
+
+	// Single monitor, or per-screen trays (one flat menu per screen).
+	if root, ok := byID[rootID]; ok {
+		if len(snaps) > 1 {
+			items = append(items, schema.MenuItemSchema{
+				Label:      root.displayName,
+				IconName:   "display.png",
+				IsDisabled: true,
+			})
+		}
+		items = append(items, createMonitorItems(root, perScreen)...)
 	}
 
 	utilLog.Debugf("Finished Generating Tray Menu Schema for %d monitors.", len(snaps))
 	return &schema.MenuSchema{
 		Items: items,
 	}
+}
+
+// createAllDisplaysItems builds the top-level tray actions that apply to every
+// display at once (monitorID -1, the same calls the Global hotkeys make).
+// firstPaused is the pause state of the lowest-ID monitor, which is what the
+// global pause toggle keys off, so the label matches what a click will do.
+func (wp *Plugin) createAllDisplaysItems(firstPaused bool) []schema.MenuItemSchema {
+	pauseLabel := i18n.T("Pause Play")
+	pauseIcon := "pause.png"
+	if firstPaused || wp.IsGateSuppressed() {
+		pauseLabel = i18n.T("Resume Play")
+		pauseIcon = "play.png"
+	}
+
+	res := []schema.MenuItemSchema{
+		{
+			Label:    i18n.T("Next Wallpaper"),
+			IconName: "next.png",
+			Action:   func() { go wp.SetNextWallpaper(-1, true) },
+		},
+		{
+			Label:    i18n.T("Prev Wallpaper"),
+			IconName: "prev.png",
+			Action:   func() { go wp.SetPreviousWallpaper(-1, true) },
+		},
+	}
+	if wp.cfg.GetWallpaperChangeFrequency() != FrequencyNever {
+		res = append(res, schema.MenuItemSchema{
+			Label:    pauseLabel,
+			IconName: pauseIcon,
+			Action:   func() { wp.TogglePauseMonitorAction(-1) },
+		})
+	}
+	res = append(res, schema.MenuItemSchema{
+		Label:    i18n.T("Shuffle"),
+		IconName: "shuffle.png",
+		Action:   func() { go wp.TriggerShuffle(-1) },
+	})
+	return res
 }
 
 // CreatePrefsSchema creates a declarative preferences tabs schema for wallpaper settings.

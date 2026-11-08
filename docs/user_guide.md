@@ -49,7 +49,7 @@ When one display is connected, the tray menu shows actions directly:
 
 When two or more displays are connected, Spice adapts its tray menu to your operating system and labels every monitor with its hardware/localized name (e.g., **Display 1 (U34G2G1)** or **Display 2 (Studio Display)**):
 
-* **macOS (Separate Spaces enabled — default):** Each display has its own menu bar. Clicking the Spice icon on any display opens a **flat, context-aware menu** scoped directly to that display, headed by its **Display *N* (*Name*)** label—no submenus required.
+* **macOS (Separate Spaces enabled — default):** Each display has its own menu bar with its own Spice icon. Every one opens the same layout as below — **all-display** controls at the top and a **submenu** per display — but the submenu for **the display you clicked on** is listed first.
 * **Windows (and macOS with Separate Spaces disabled):** A single tray icon lives on the primary display. The top level of the menu holds **all-display** controls — *Next*, *Prev*, *Pause Play*, and *Shuffle* act on every display at once, just like the global shortcuts. Every display, starting with **Display 1 (Primary)**, then gets its own **submenu** containing the full set of per-display controls (*Next*, *Prev*, *Pause Play*, *Shuffle*, *Source*, *Attribution*, *Add to Favorites*, *Tune Image*, and *Delete And Block*).
 * **Active-Display Window Placement:** Opening **Preferences**, **Tune Image**, or **About Spice** centers the window directly on the display you are actively using (the display under your cursor), rather than always jumping back to the primary monitor.
 
@@ -369,7 +369,7 @@ When Spice starts, it detects all connected displays automatically. If you conne
 ### Tray Menu & Window Placement with Multiple Displays
 
 - **Hardware Display Names:** Spice automatically queries your display's hardware/localized name (e.g., *Display 1 (DELL U2723QE)*, *Display 2 (Built-in Retina Display)*) and displays it in the tray menu header, display submenus, and the **Tune Image** window title and subtitle.
-- **macOS Per-Screen Menu Bar:** When *"Displays have separate Spaces"* is enabled in macOS System Settings, clicking the Spice menu bar icon on any monitor controls **that specific monitor** directly at the top level of the menu.
+- **macOS Per-Screen Menu Bar:** When *"Displays have separate Spaces"* is enabled in macOS System Settings, every monitor's menu bar has a Spice icon. Its top level controls **all displays at once**, and the submenu for **that specific monitor** is listed first, followed by the others.
 - **Windows / Single-Tray Submenus:** On Windows, the top level of the tray menu controls **all displays at once** (*Next*, *Prev*, *Pause Play*, *Shuffle*), and **Display 1** (always your OS primary display), **Display 2, 3, …** each have their own **submenu** with identical per-display controls. The all-display *Pause Play* label follows Display 1's state.
 - **Active-Display Windows:** **Preferences**, **Tune Image**, and **About Spice** open centered on the display under your cursor rather than defaulting to Display 1.
 

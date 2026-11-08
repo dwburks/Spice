@@ -495,20 +495,38 @@ func TestCreateTrayMenu_SingleMonitor_NoHeaderRow(t *testing.T) {
 	assert.False(t, s.Items[0].IsDisabled)
 }
 
-func TestCreateTrayMenu_PerScreenTray_FlatMenu(t *testing.T) {
-	wp, _, mgr := newTrayTestPlugin(t, true, image.Pt(2000, 10)) // cursor on Monitor 1
+func TestCreateTrayMenu_PerScreenTray_AllDisplaysRootClickedScreenFirst(t *testing.T) {
+	wp, tos, mgr := newTrayTestPlugin(t, true, image.Pt(2000, 10)) // cursor on Monitor 1
 	mgr.On("RebuildTrayMenuImmediate").Return()
 	assert.True(t, wp.syncActiveTrayMonitor())
 	assert.Equal(t, int64(1), wp.activeTrayMonitorID.Load())
 
-	s := wp.CreateTrayMenu()
-	assert.NotEmpty(t, s.Items)
-	assert.Equal(t, "Display 2 (Studio)", s.Items[0].Label)
-	assert.True(t, s.Items[0].IsDisabled)
-	for _, it := range s.Items {
-		assert.Nil(t, it.SubMenu, "per-screen tray must not render Display submenus")
+	submenus := func(s *schema.MenuSchema) []string {
+		var subs []string
+		for _, it := range s.Items {
+			if it.SubMenu != nil {
+				subs = append(subs, it.Label)
+			}
+		}
+		return subs
 	}
+
+	// Same layout as single-tray: all-display actions on top, no header row.
+	s := wp.CreateTrayMenu()
+	assert.Equal(t, "Next Wallpaper", s.Items[0].Label)
+	assert.Equal(t, "Prev Wallpaper", s.Items[1].Label)
+	for _, it := range s.Items {
+		assert.False(t, it.IsDisabled, "no disabled display header at the top level: %q", it.Label)
+		assert.NotEqual(t, "Delete And Block", it.Label, "per-image actions belong in the display submenus")
+	}
+
+	// The screen whose menu bar was clicked comes first, then the rest.
+	assert.Equal(t, []string{"Display 2 (Studio)", "Display 1 (Built-in)"}, submenus(s))
 	mgr.AssertCalled(t, "RebuildTrayMenuImmediate")
+
+	tos.cursor = image.Pt(500, 10) // move to Monitor 0
+	assert.True(t, wp.syncActiveTrayMonitor())
+	assert.Equal(t, []string{"Display 1 (Built-in)", "Display 2 (Studio)"}, submenus(wp.CreateTrayMenu()))
 }
 
 func TestMonitorDisplayLabel_And_ActiveMonitorBounds(t *testing.T) {

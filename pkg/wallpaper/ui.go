@@ -268,20 +268,26 @@ func (wp *Plugin) CreateTrayMenu() *schema.MenuSchema {
 	}
 
 	perScreen := wp.hasPerScreenTray()
-	rootID, submenuMonitors := PlanTrayMonitors(monitors, perScreen, int(wp.activeTrayMonitorID.Load()))
+	rootID, _ := PlanTrayMonitors(monitors, perScreen, int(wp.activeTrayMonitorID.Load()))
 
-	// Single-tray multi-monitor (Windows, Linux, single-tray macOS): the top
-	// level acts on every display, mirroring the Global hotkeys, and each
-	// display (primary first) gets its own submenu with its per-image items.
-	if !perScreen && len(snaps) > 1 {
+	// Multi-monitor: the top level acts on every display, mirroring the Global
+	// hotkeys, and each display gets its own submenu with its per-image items.
+	// The root display's submenu comes first: the primary display in
+	// single-tray mode, or the display whose menu bar was clicked on macOS
+	// with separate Spaces.
+	if len(snaps) > 1 {
 		items = append(items, wp.createAllDisplaysItems(snaps[0].paused)...)
 		items = append(items, schema.MenuItemSchema{IsSeparator: true})
 
 		ordered := make([]Monitor, 0, len(snaps))
-		if _, ok := byID[rootID]; ok {
-			ordered = append(ordered, byID[rootID].mon)
+		if root, ok := byID[rootID]; ok {
+			ordered = append(ordered, root.mon)
 		}
-		ordered = append(ordered, submenuMonitors...)
+		for _, m := range monitors {
+			if m.ID != rootID {
+				ordered = append(ordered, m)
+			}
+		}
 		for _, m := range ordered {
 			snap, ok := byID[m.ID]
 			if !ok {
@@ -301,15 +307,8 @@ func (wp *Plugin) CreateTrayMenu() *schema.MenuSchema {
 		return &schema.MenuSchema{Items: items}
 	}
 
-	// Single monitor, or per-screen trays (one flat menu per screen).
+	// Single monitor: its actions sit at the top level.
 	if root, ok := byID[rootID]; ok {
-		if len(snaps) > 1 {
-			items = append(items, schema.MenuItemSchema{
-				Label:      root.displayName,
-				IconName:   "display.png",
-				IsDisabled: true,
-			})
-		}
 		items = append(items, createMonitorItems(root, perScreen)...)
 	}
 

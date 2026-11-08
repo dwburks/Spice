@@ -2043,14 +2043,27 @@ func (sm *SettingsManager) ShowConfirm(title, message string, callback func(bool
 
 // ShowAddQueryDialog opens the modal for adding image queries.
 func (sm *SettingsManager) ShowAddQueryDialog(cfg schema.AddQueryConfig, initialURL, initialDesc string, onAdded func()) {
+	sm.showQueryDialog(cfg, "", initialURL, initialDesc, onAdded)
+}
+
+// showEditQueryDialog opens the same modal prefilled with an existing query; Save commits via cfg.UpdateHandler.
+func (sm *SettingsManager) showEditQueryDialog(cfg schema.AddQueryConfig, queryID, initialURL, initialDesc string, onSaved func()) {
+	sm.showQueryDialog(cfg, queryID, initialURL, initialDesc, onSaved)
+}
+
+// showQueryDialog implements both the add dialog (editID == "") and the edit dialog (editID != "").
+// Edit mode hides the Active checkbox and commits via cfg.UpdateHandler immediately; it never stages
+// anything for "Apply Changes".
+func (sm *SettingsManager) showQueryDialog(cfg schema.AddQueryConfig, editID, initialURL, initialDesc string, onDone func()) {
+	editing := editID != ""
 	if sm.queueDialogs {
-		utilLog.Debugf("ShowAddQueryDialog: window not shown yet, queueing dialog for URL: %s", initialURL)
+		utilLog.Debugf("showQueryDialog: window not shown yet, queueing dialog for URL: %s", initialURL)
 		sm.queuedDialogs = append(sm.queuedDialogs, func() {
-			sm.ShowAddQueryDialog(cfg, initialURL, initialDesc, onAdded)
+			sm.showQueryDialog(cfg, editID, initialURL, initialDesc, onDone)
 		})
 		return
 	}
-	utilLog.Debugf("ShowAddQueryDialog: Triggered with URL: %s", initialURL)
+	utilLog.Debugf("showQueryDialog: Triggered with URL: %s", initialURL)
 
 	urlEntry := widget.NewEntry()
 	urlEntry.SetPlaceHolder(cfg.URLPlaceholder)
@@ -2145,7 +2158,9 @@ func (sm *SettingsManager) ShowAddQueryDialog(cfg schema.AddQueryConfig, initial
 	inputContainer.Add(sm.CreateSettingTitleLabel(i18n.T("Description:")))
 	inputContainer.Add(descEntry)
 	inputContainer.Add(formStatus)
-	inputContainer.Add(activeBool)
+	if !editing {
+		inputContainer.Add(activeBool)
+	}
 	inputContainer.Add(widget.NewSeparator())
 	inputContainer.Add(container.NewHBox(cancelButton, layout.NewSpacer(), saveButton))
 
@@ -2162,6 +2177,23 @@ func (sm *SettingsManager) ShowAddQueryDialog(cfg schema.AddQueryConfig, initial
 			}
 		}
 
+		if editing {
+			if cfg.UpdateHandler == nil {
+				return
+			}
+			if err := cfg.UpdateHandler(editID, descEntry.Text, urlEntry.Text); err != nil {
+				formStatus.SetText(err.Error())
+				formStatus.Importance = widget.DangerImportance
+				formStatus.Refresh()
+				return
+			}
+			if onDone != nil {
+				onDone()
+			}
+			d.Hide()
+			return
+		}
+
 		newID, err := cfg.AddHandler(descEntry.Text, urlEntry.Text, activeBool.Checked)
 		if err != nil {
 			formStatus.SetText(err.Error())
@@ -2170,8 +2202,8 @@ func (sm *SettingsManager) ShowAddQueryDialog(cfg schema.AddQueryConfig, initial
 			return
 		}
 
-		if onAdded != nil {
-			onAdded()
+		if onDone != nil {
+			onDone()
 		}
 
 		if activeBool.Checked {
@@ -2186,7 +2218,7 @@ func (sm *SettingsManager) ShowAddQueryDialog(cfg schema.AddQueryConfig, initial
 		d.Hide()
 	}
 
-	utilLog.Debug("ShowAddQueryDialog: Calling d.Show()")
+	utilLog.Debug("showQueryDialog: Calling d.Show()")
 	d.Show()
 }
 
@@ -2206,6 +2238,7 @@ type queryRowWidgets struct {
 	row          *fyne.Container
 	urlLink      *widget.Hyperlink
 	activeCheck  *widget.Check
+	editButton   *widget.Button
 	deleteButton *widget.Button
 }
 
@@ -2299,6 +2332,25 @@ func (sm *SettingsManager) renderQueryList(v schema.QueryListItem) fyne.CanvasOb
 			sm.RefreshUI() // Update UI states (accordion titles) without triggering wallpaper changes
 		}
 
+		// Wire edit button: only for editable lists and non-managed rows. Edits commit immediately
+		// (like Add/Delete) so they never register a pending change or light up "Apply Changes".
+		if v.EditConfig != nil && !query.Managed {
+			editCfg := *v.EditConfig
+			rw.editButton.OnTapped = func() {
+				initialURL := query.URL
+				if v.GetDisplayURL != nil {
+					if u := v.GetDisplayURL(query); u != nil {
+						initialURL = u.String()
+					}
+				}
+				sm.showEditQueryDialog(editCfg, query.ID, initialURL, query.Description, ql.Refresh)
+			}
+			rw.editButton.Show()
+		} else {
+			rw.editButton.OnTapped = nil
+			rw.editButton.Hide()
+		}
+
 		// Wire action button
 		label := i18n.T("Delete")
 		if v.DeleteLabel != "" {
@@ -2369,12 +2421,15 @@ func (sm *SettingsManager) renderQueryList(v schema.QueryListItem) fyne.CanvasOb
 			urlLink.Truncation = fyne.TextTruncateEllipsis
 			activeCheck := widget.NewCheck(i18n.T("Active"), nil)
 			deleteButton := widget.NewButton(i18n.T("Delete"), func() {})
-			row := container.NewBorder(nil, nil, nil, container.NewHBox(activeCheck, deleteButton), urlLink)
+			editButton := widget.NewButtonWithIcon("", theme.DocumentCreateIcon(), nil)
+			editButton.Hide()
+			row := container.NewBorder(nil, nil, nil, container.NewHBox(activeCheck, editButton, deleteButton), urlLink)
 			newRows[i] = queryRowWidgets{
 				id:           q.ID,
 				row:          row,
 				urlLink:      urlLink,
 				activeCheck:  activeCheck,
+				editButton:   editButton,
 				deleteButton: deleteButton,
 			}
 			bindRow(&newRows[i], q)

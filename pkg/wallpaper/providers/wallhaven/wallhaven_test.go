@@ -6,9 +6,12 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	fynetest "fyne.io/fyne/v2/test"
 	"github.com/dixieflatline76/Spice/v2/pkg/provider"
+	"github.com/dixieflatline76/Spice/v2/pkg/ui/schema"
 	"github.com/dixieflatline76/Spice/v2/pkg/wallpaper"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestProvider_EnrichImage(t *testing.T) {
@@ -321,4 +324,49 @@ type mockTransport struct {
 
 func (m *mockTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return m.RoundTripFunc(req)
+}
+
+func TestProvider_CreateQueryPanel_EditConfig(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+	cfg := wallpaper.GetConfig(app.Preferences())
+	p := NewProvider(cfg, &http.Client{})
+
+	panel := p.CreateQueryPanel(nil, "")
+	var list *schema.QueryListItem
+	for _, sec := range panel.Sections {
+		for _, it := range sec.Items {
+			if ql, ok := it.(schema.QueryListItem); ok {
+				list = &ql
+			}
+		}
+	}
+	require.NotNil(t, list)
+	require.NotNil(t, list.EditConfig)
+	require.NotNil(t, list.EditConfig.UpdateHandler)
+	assert.Equal(t, WallhavenURLRegexp, list.EditConfig.URLValidator)
+
+	id, err := cfg.AddImageQuery("Edit me", "https://wallhaven.cc/api/v1/search?q=edit-before", false)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cfg.RemoveImageQuery(id) })
+
+	// Valid user-facing URL is parsed to the API form and stored.
+	require.NoError(t, list.EditConfig.UpdateHandler(id, "Edited", "https://wallhaven.cc/search?q=edit-after"))
+	q, ok := cfg.GetQuery(id)
+	require.True(t, ok)
+	assert.Equal(t, "Edited", q.Description)
+	assert.Equal(t, "https://wallhaven.cc/api/v1/search?q=edit-after", q.URL)
+
+	// The display URL shown in the list round-trips to the stored URL (no spurious "URL changed").
+	disp := list.GetDisplayURL(schema.Query{ID: id, URL: q.URL})
+	require.NotNil(t, disp)
+	assert.Regexp(t, WallhavenURLRegexp, disp.String())
+	require.NoError(t, list.EditConfig.UpdateHandler(id, "Edited", disp.String()))
+	q2, _ := cfg.GetQuery(id)
+	assert.Equal(t, q.URL, q2.URL)
+
+	// Invalid URL is rejected and nothing changes.
+	assert.Error(t, list.EditConfig.UpdateHandler(id, "Edited", "https://example.com/not-wallhaven"))
+	q3, _ := cfg.GetQuery(id)
+	assert.Equal(t, q.URL, q3.URL)
 }

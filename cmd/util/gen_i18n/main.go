@@ -74,6 +74,9 @@ var allowIdenticalToEnglish = map[string]bool{
 	// Short functional strings identical in many languages
 	"Error: ": true,
 	"Minutes": true,
+	// Size units: "MB"/"GB" are the standard abbreviation in many locales
+	"{{.Size}} MB": true,
+	"{{.Size}} GB": true,
 
 	// Attribution keys where some languages use the same prefix as English
 	"attribution_in": true,

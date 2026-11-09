@@ -30,6 +30,8 @@ const (
 	TargetedShortcutsDisabledPrefKey = pluginPrefix + "targeted_shortcuts_disabled_key" // TargetedShortcutsDisabledPrefKey is used to set and retrieve the boolean flag for disabling targeted hotkeys
 	LogLevelPrefKey                  = pluginPrefix + "log_level_key"
 	MaxConcurrentProcessorsPrefKey   = pluginPrefix + "max_concurrent_processors_key"
+	CacheDiskBudgetMBPrefKey         = pluginPrefix + "cache_disk_budget_mb_key" // int megabytes: disk budget for master files (active + retained)
+	MaxDownloadSizeMBPrefKey         = pluginPrefix + "max_download_size_mb_key" // int megabytes: largest original image Spice will download
 
 	// Activity Gate keys (Milestone 3.0 Engine Intelligence)
 	PauseWhenBusyPrefKey     = pluginPrefix + "pause_when_busy_key"     // bool, default true
@@ -144,6 +146,25 @@ func (f Frequency) Duration() time.Duration {
 	return time.Duration(f) * time.Minute
 }
 
+// Disk cache defaults.
+const (
+	// DefaultCacheDiskBudgetMB bounds the total size of master files on disk (active + retained).
+	// CacheSize limits how many images are in rotation; this limits how many bytes of
+	// originals are kept around for reuse after they leave rotation. Images in rotation
+	// are never evicted, so a large CacheSize can exceed the budget on its own.
+	DefaultCacheDiskBudgetMB = 2048
+	// DefaultMaxDownloadSizeMB is the largest original image Spice downloads.
+	DefaultMaxDownloadSizeMB = 25
+	// bytesPerMB converts megabyte preferences to bytes.
+	bytesPerMB int64 = 1024 * 1024
+)
+
+// MaxDownloadSizeOptionsMB are the "Max download size" choices; 0 means no limit.
+var MaxDownloadSizeOptionsMB = []int{10, 25, 50, 100, 0}
+
+// CacheDiskBudgetOptionsMB are the "Cache disk space" choices.
+var CacheDiskBudgetOptionsMB = []int{500, 1024, 2048, 5120, 10240}
+
 // CacheSize represents the predefined cache sizes (in number of images).
 type CacheSize int
 
@@ -194,21 +215,44 @@ func (cs CacheSize) Size() int {
 	return CacheSizeValues[cs]
 }
 
+// cacheSizeOptions is the Cache Size dropdown, in display order. The dropdown index is
+// NOT the CacheSize value (0 and 2 are retired enum values), so the UI must translate
+// with CacheSizeToIndex / IndexToCacheSize.
+var cacheSizeOptions = []CacheSize{
+	Cache100Images,
+	Cache300Images,
+	Cache500Images,
+	Cache1000Images,
+	Cache5000Images,
+	Cache10000Images,
+}
+
 // GetCacheSizes returns a list of all available cache sizes AS fmt.Stringer.
 func GetCacheSizes() []fmt.Stringer {
-	cacheSizes := []CacheSize{
-		Cache100Images,
-		Cache300Images,
-		Cache500Images,
-		Cache1000Images,
-		Cache5000Images,
-		Cache10000Images,
-	}
-	stringers := make([]fmt.Stringer, len(cacheSizes))
-	for i, cs := range cacheSizes {
+	stringers := make([]fmt.Stringer, len(cacheSizeOptions))
+	for i, cs := range cacheSizeOptions {
 		stringers[i] = cs // Assign to the interface type
 	}
 	return stringers
+}
+
+// CacheSizeToIndex returns the dropdown index of cs (the 300-image default's index for
+// values that are not an option).
+func CacheSizeToIndex(cs CacheSize) int {
+	for i, opt := range cacheSizeOptions {
+		if opt == cs {
+			return i
+		}
+	}
+	return CacheSizeToIndex(Cache300Images)
+}
+
+// IndexToCacheSize returns the CacheSize for a dropdown index (300 images if out of range).
+func IndexToCacheSize(i int) CacheSize {
+	if i >= 0 && i < len(cacheSizeOptions) {
+		return cacheSizeOptions[i]
+	}
+	return Cache300Images
 }
 
 // NetworkTimeouts defines the standard durations for various network operations.

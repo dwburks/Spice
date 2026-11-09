@@ -272,6 +272,7 @@ func TestProvider_FetchImages(t *testing.T) {
 					"path": "https://w.wallhaven.cc/full/img1.jpg",
 					"short_url": "https://wh.cc/img1",
 					"file_type": "image/jpeg",
+					"file_size": 31457280,
 					"uploader": { "username": "User1" }
 				},
 				{
@@ -308,6 +309,8 @@ func TestProvider_FetchImages(t *testing.T) {
 	assert.Len(t, images, 2)
 	assert.Equal(t, "img1", images[0].ID)
 	assert.Equal(t, "User1", images[0].Attribution)
+	assert.Equal(t, int64(31457280), images[0].FileSize, "file_size from search results must reach provider.Image for the pre-request size cap")
+	assert.Equal(t, int64(0), images[1].FileSize, "missing file_size means unknown")
 
 	// Test Error Case: Bad API Key (401)
 	pBad := NewProvider(&wallpaper.Config{}, client)

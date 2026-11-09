@@ -45,6 +45,14 @@ const (
 	CmdAnchorBR   Command = 209
 )
 
+// displayTracker is the optional store surface that keeps on-screen images safe from
+// cache maintenance (implemented by *ImageStore; test doubles may omit it).
+type displayTracker interface {
+	ReserveDisplay(monitorID int, id string)
+	CommitDisplay(monitorID int, id string)
+	CancelDisplay(monitorID int, id string)
+}
+
 // StoreInterface defines the subset of ImageStore methods needed by the controller.
 type StoreInterface interface {
 	Count() int
@@ -548,14 +556,32 @@ func (mc *MonitorController) applyImage(img provider.Image) {
 		return
 	}
 
-	// Keep the cross-monitor record current for every path that applies an
-	// image (Prev, favorites, re-tuning), not just next().
+	// Two independent records, both taken before the OS call (lock order mc.mu -> shownMu,
+	// then mc.mu -> store.mu; never nested in each other, no Fyne here):
+	//  - the cross-monitor claim (plugin, shownMu leaf) keeps monitors from showing the same
+	//    image, and is kept current for every path that applies an image (Prev, favorites,
+	//    re-tuning), not just next();
+	//  - the display reference (store) keeps cache maintenance from deleting the image's
+	//    files during the switch and while it is on screen.
+	prevID := mc.State.CurrentImage.ID
 	if mc.ClaimImage != nil && img.ID != "" {
 		mc.ClaimImage(mc.ID, img.ID, true)
+	}
+	dt, _ := mc.Store.(displayTracker)
+	if dt != nil {
+		dt.ReserveDisplay(mc.ID, img.ID)
 	}
 
 	// Check if file physically exists before calling OS to avoid generic errors
 	if _, err := mc.os.Stat(path); os.IsNotExist(err) {
+		// Not published: release the reservation and point the claim back at the image
+		// that is still on screen, so both records keep describing the same thing.
+		if dt != nil {
+			dt.CancelDisplay(mc.ID, img.ID)
+		}
+		if mc.ClaimImage != nil && prevID != "" && prevID != img.ID {
+			mc.ClaimImage(mc.ID, prevID, true)
+		}
 		log.Printf("[Monitor %d] ERROR: Wallpaper file missing: %s. Metadata is stale. Requesting refetch...", mc.ID, path)
 		// Clear local metadata that is proven stale so it's not chosen again
 		mc.Store.ClearDerivatives(img.ID)
@@ -570,7 +596,11 @@ func (mc *MonitorController) applyImage(img provider.Image) {
 
 	log.Printf("[Monitor %d] Setting wallpaper: %s", mc.ID, path)
 	if err := mc.os.SetWallpaper(path, mc.ID); err != nil {
+		// Keep both the previous image and the reservation protected: we cannot tell
+		// which one the OS is showing. The next switch drops the stale reservation.
 		log.Printf("[ERROR] [Monitor %d] Failed to set wallpaper: %v", mc.ID, err)
+	} else if dt != nil {
+		dt.CommitDisplay(mc.ID, img.ID) // releases the previously shown image
 	}
 	mc.Store.MarkSeen(path)
 

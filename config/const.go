@@ -38,6 +38,9 @@ func GetWorkingDir() string {
 var appDir string
 
 func init() {
+	// Test binaries only: redirect all per-user dirs to a temp sandbox first (test_sandbox.go).
+	setupTestSandbox()
+
 	switch runtime.GOOS {
 	case "windows":
 		userCacheDir, _ := os.UserCacheDir()

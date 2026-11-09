@@ -1,10 +1,10 @@
 package wallpaper
 
 import (
-	"encoding/json"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dixieflatline76/Spice/v2/pkg/provider"
@@ -43,6 +43,39 @@ type ImageStore struct {
 
 	// QueryActiveFunc checks if a given source query ID is still active in the configuration.
 	QueryActiveFunc func(string) bool
+
+	// retained indexes master files that left rotation but stay on disk for reuse
+	// (see retained.go). Guarded by mu. An ID is never in both idSet and retained.
+	retained map[string]RetainedEntry
+	// deleting marks IDs whose files a deleter currently owns (cache_lease.go). Guarded by mu.
+	deleting map[string]bool
+	// derivDeleting marks IDs whose derivatives (only) are being deleted. Guarded by mu.
+	derivDeleting map[string]bool
+	// leases marks IDs a pipeline job currently owns (cache_lease.go). Guarded by mu.
+	leases map[string]bool
+	// Display references (cache_lease.go), guarded by mu: images on screen or being
+	// switched to per monitor, reference-counted per ID. Deleters never touch them.
+	displayRefs      map[string]int
+	shownByMonitor   map[int]string
+	pendingByMonitor map[int]string
+	// pendingDelete marks unowned IDs whose delete was refused while a job or a display
+	// held them; it is completed when the last holder lets go. Guarded by mu.
+	pendingDelete map[string]bool
+	// Debounced disk-budget check after admissions (cache_lease.go). budgetMu is a leaf lock.
+	budgetMu    sync.Mutex
+	budgetTimer *time.Timer
+	budgetDelay time.Duration
+	evictAgain  atomic.Bool
+	// evictMu serializes EnforceDiskBudget passes (TryLock only; taken before mu, never
+	// while holding mu, and never nested with wp.monMu or mc.mu).
+	evictMu sync.Mutex
+
+	// Persistence (cache_persist.go). writeMu serializes file writes; it is a leaf lock
+	// that may be taken while holding mu (sync-save mode), never the reverse.
+	writeMu          sync.Mutex
+	saveGen          atomic.Uint64
+	lastWrittenGen   uint64 // guarded by writeMu
+	lastMirrorDigest string // guarded by writeMu: digest of the legacy mirror on disk
 }
 
 func NewImageStore() *ImageStore {
@@ -55,6 +88,15 @@ func NewImageStore() *ImageStore {
 		debounceDuration:  2 * time.Second,
 		updateCh:          make(chan struct{}),
 		resolutionBuckets: make(map[string][]string),
+		retained:          make(map[string]RetainedEntry),
+		deleting:          make(map[string]bool),
+		derivDeleting:     make(map[string]bool),
+		leases:            make(map[string]bool),
+		displayRefs:       make(map[string]int),
+		shownByMonitor:    make(map[int]string),
+		pendingByMonitor:  make(map[int]string),
+		pendingDelete:     make(map[string]bool),
+		budgetDelay:       defaultBudgetCheckDelay,
 	}
 	return store
 }
@@ -108,6 +150,9 @@ func (s *ImageStore) replace(img provider.Image) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.deleting[img.ID] || s.derivDeleting[img.ID] {
+		return false
+	}
 	for i, existing := range s.images {
 		if existing.ID == img.ID {
 			// Diagnostic: Log when DerivativePaths are being cleared.
@@ -257,21 +302,28 @@ func (s *ImageStore) removeFromBucketsLocked(id string, derivativePaths map[stri
 // CALLER MUST HOLD s.mu.Lock()
 func (s *ImageStore) scheduleSaveLocked() {
 	if !s.asyncSave {
-		// Sync mode: snapshot while locked and save immediately.
-		snapshot := make([]provider.Image, len(s.images))
-		copy(snapshot, s.images)
-		s.saveCacheInternal(snapshot)
+		// Sync mode (tests): snapshot while locked and save immediately.
+		if err := s.writeSnapshot(s.snapshotLocked()); err != nil {
+			log.Printf("Store: Failed to save cache: %v", err)
+		}
 		return
 	}
+	s.scheduleSaveAfter(s.debounceDuration)
+}
 
+// scheduleSaveAfter (re)arms the debounced async save. Takes saveMu only.
+func (s *ImageStore) scheduleSaveAfter(d time.Duration) {
 	s.saveMu.Lock()
 	defer s.saveMu.Unlock()
 
 	if s.saveTimer != nil {
 		s.saveTimer.Stop()
 	}
-	s.saveTimer = time.AfterFunc(s.debounceDuration, func() {
-		s.SaveCache()
+	s.saveTimer = time.AfterFunc(d, func() {
+		if err := s.SaveCache(); err != nil {
+			log.Printf("Store: Cache save failed, retrying in %v: %v", saveRetryDelay, err)
+			s.scheduleSaveAfter(saveRetryDelay)
+		}
 	})
 }
 
@@ -331,10 +383,23 @@ func (s *ImageStore) Add(img provider.Image) bool {
 		return false
 	}
 
-	// Active Query Check: Reject images from queries disabled mid-download
+	// Ownership: never admit an ID whose files a deleter currently owns.
+	if s.deleting[img.ID] || s.derivDeleting[img.ID] {
+		log.Debugf("Store: Rejecting %s while its files are being deleted.", img.ID)
+		return false
+	}
+
+	// Active Query Check: Reject images from queries disabled mid-download. The finished
+	// download is kept as a retained entry (linked to its query) instead of being orphaned.
 	if s.QueryActiveFunc != nil && img.SourceQueryID != "" {
 		if !s.QueryActiveFunc(img.SourceQueryID) {
-			log.Debugf("Store: Rejecting new image %s from inactive query %s", img.ID, img.SourceQueryID)
+			log.Debugf("Store: Query %s is inactive; retaining finished image %s instead of admitting it.", img.SourceQueryID, img.ID)
+			if ids := s.retainLocked([]provider.Image{img}, false); len(ids) > 0 {
+				s.scheduleSaveLocked()
+				if s.fm != nil {
+					s.fm.runAsync(func() { s.refreshRetainedSizes(ids) })
+				}
+			}
 			return false
 		}
 	}
@@ -345,6 +410,11 @@ func (s *ImageStore) Add(img provider.Image) bool {
 
 	s.images = append(s.images, img)
 	s.idSet[img.ID] = true
+	if _, wasRetained := s.retained[img.ID]; wasRetained {
+		// Re-admitted from the retained index: the master moves back to the active set.
+		delete(s.retained, img.ID)
+		log.Debugf("[Retained] Re-admitted %s to rotation.", img.ID)
+	}
 	if img.FilePath != "" {
 		s.pathSet[img.FilePath] = len(s.images) - 1
 	}
@@ -448,7 +518,17 @@ func (s *ImageStore) Remove(id string) (provider.Image, bool) {
 	}
 
 	if idx == -1 {
-		return provider.Image{}, false
+		// Not in rotation, but possibly retained (e.g. still on screen after its query was
+		// disabled): blocking it must drop the entry and its files too.
+		e, retained := s.retained[id]
+		if !retained {
+			return provider.Image{}, false
+		}
+		delete(s.retained, id)
+		s.avoidSet[id] = true
+		s.scheduleSaveLocked()
+		s.asyncDeleteUnownedIDs([]string{id})
+		return e.Image, true
 	}
 
 	img := s.images[idx]
@@ -473,10 +553,7 @@ func (s *ImageStore) Remove(id string) (provider.Image, bool) {
 	s.removeFromBucketsLocked(id, img.DerivativePaths) // Incremental bucket removal
 	s.avoidSet[id] = true
 	s.scheduleSaveLocked()
-
-	if s.fm != nil {
-		s.fm.AsyncDeepDelete(id)
-	}
+	s.asyncDeleteUnownedIDs([]string{id})
 
 	return img, true
 }
@@ -515,9 +592,11 @@ func (s *ImageStore) Wipe() {
 	s.Clear()
 	s.mu.Lock()
 	s.avoidSet = make(map[string]bool)
+	s.retained = make(map[string]RetainedEntry)
+	s.scheduleSaveLocked()
 	s.mu.Unlock()
 	if s.fm != nil {
-		s.fm.AsyncCleanupOrphans(map[string]bool{})
+		s.fm.runAsync(func() { s.CleanupOrphanFiles(nil) })
 	}
 }
 
@@ -531,17 +610,37 @@ func (s *ImageStore) GetKnownIDs() map[string]bool {
 	return known
 }
 
-// RemoveByQueryID removes all images associated with a specific provider query ID.
+// RemoveByQueryID removes all images associated with a specific provider query ID from rotation.
+// Their master files are kept as retained entries (still linked to the query, so re-enabling it
+// can re-admit them without network access) and are only deleted by disk-budget eviction.
+// Favorites copies are the exception: clearing favorites deletes their cached files as before.
 func (s *ImageStore) RemoveByQueryID(queryID string) {
-	s.mu.Lock()
+	if queryID == FavoritesQueryID {
+		s.mu.Lock()
+		toDelete := s.removeQueryImagesLocked(queryID)
+		s.scheduleSaveLocked()
+		s.mu.Unlock()
+		ids := make([]string, len(toDelete))
+		for i, img := range toDelete {
+			ids[i] = img.ID
+		}
+		s.asyncDeleteUnownedIDs(ids)
+		return
+	}
+	s.RetainByQueryID(queryID, false)
+}
+
+// removeQueryImagesLocked drops a query's images from the active set and returns them.
+// CALLER MUST HOLD s.mu.Lock().
+func (s *ImageStore) removeQueryImagesLocked(queryID string) []provider.Image {
 	var remaining []provider.Image
-	var toDelete []provider.Image
+	var removed []provider.Image
 	newSeenCount := 0
 	for _, img := range s.images {
 		if img.SourceQueryID == queryID {
-			toDelete = append(toDelete, img)
+			removed = append(removed, img)
 			delete(s.idSet, img.ID)
-			log.Debugf("[RemoveByQueryID] Matched %s (Source: %s). Queueing for deletion.", img.ID, img.SourceQueryID)
+			log.Debugf("[RemoveByQueryID] Matched %s (Source: %s). Removing from rotation.", img.ID, img.SourceQueryID)
 			if img.FilePath != "" {
 				delete(s.pathSet, img.FilePath)
 			}
@@ -563,17 +662,7 @@ func (s *ImageStore) RemoveByQueryID(queryID string) {
 		}
 	}
 	s.rebuildBucketsLocked() // Ensure buckets are updated after batch removal
-
-	s.scheduleSaveLocked()
-	s.mu.Unlock()
-
-	if s.fm != nil {
-		ids := make([]string, len(toDelete))
-		for i, img := range toDelete {
-			ids[i] = img.ID
-		}
-		s.fm.AsyncDeepDeleteBatch(ids)
-	}
+	return removed
 }
 
 func (s *ImageStore) List() []provider.Image {
@@ -584,44 +673,55 @@ func (s *ImageStore) List() []provider.Image {
 	return res
 }
 
+// LoadAvoidSet replaces the blocklist. Retained entries that are blocked are dropped and
+// their files deleted (blocked images are never kept for reuse).
 func (s *ImageStore) LoadAvoidSet(avoidSet map[string]bool) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.avoidSet = make(map[string]bool)
+	var purge []string
 	for k, v := range avoidSet {
 		s.avoidSet[k] = v
-	}
-}
-
-func (s *ImageStore) LoadCache() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.cachePath == "" {
-		return nil
-	}
-
-	file, err := os.Open(s.cachePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
+		if _, ok := s.retained[k]; v && ok {
+			delete(s.retained, k)
+			purge = append(purge, k)
 		}
-		return err
 	}
-	defer file.Close()
-
-	if err := json.NewDecoder(file).Decode(&s.images); err != nil {
-		return err
-	}
-
-	// Namespacing Migration: Upgrade legacy IDs to namespaced format
-	migrationOccurred := s.migrateLegacyIDsLocked()
-
-	if migrationOccurred {
-		log.Printf("Migration: Namespacing upgrade complete. Saving updated cache.")
-		// No lock needed as we're inside LoadCache which holds mu.Lock()
+	if len(purge) > 0 {
 		s.scheduleSaveLocked()
 	}
+	s.mu.Unlock()
+	s.asyncDeleteUnownedIDs(purge)
+}
+
+// LoadCache loads the active store and the retained index (see cache_persist.go).
+// The retained index is loaded even when the legacy active cache file is missing.
+func (s *ImageStore) LoadCache() error {
+	s.mu.RLock()
+	cachePath := s.cachePath
+	s.mu.RUnlock()
+
+	// File I/O happens before taking the write lock: lowercase cached file extensions
+	// (so every OS finds the same files), then read the persisted state.
+	var renamed map[string]string
+	if s.fm != nil {
+		renamed = s.fm.NormalizeExtensions()
+	}
+	st, err := loadPersisted(cachePath)
+	if err != nil {
+		return err
+	}
+	s.writeMu.Lock()
+	s.lastMirrorDigest = st.mirrorDigest
+	s.writeMu.Unlock()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.images = st.images
+	s.retained = st.retained
+	extMigrated := applyRenamedPaths(s.images, s.retained, renamed)
+
+	// Namespacing Migration: Upgrade legacy IDs to namespaced format
+	migrationOccurred := s.migrateLegacyIDsLocked() || extMigrated
 
 	s.idSet = make(map[string]bool)
 	s.pathSet = make(map[string]int)
@@ -640,70 +740,28 @@ func (s *ImageStore) LoadCache() error {
 			s.resolutionBuckets[res] = append(s.resolutionBuckets[res], img.ID)
 		}
 	}
+	// Invariant: an ID is active or retained, never both (active wins).
+	for id := range s.retained {
+		if s.idSet[id] {
+			delete(s.retained, id)
+		}
+	}
+
+	if migrationOccurred {
+		log.Printf("Migration: Namespacing upgrade complete. Saving updated cache.")
+		// No lock needed as we're inside LoadCache which holds mu.Lock()
+		s.scheduleSaveLocked()
+	}
 	return nil
 }
 
-func (s *ImageStore) SaveCache() {
+// SaveCache writes the store and retained index now. It returns the write error, if any;
+// on failure the previously persisted index is left in place.
+func (s *ImageStore) SaveCache() error {
 	s.mu.RLock()
-	snapshot := make([]provider.Image, len(s.images))
-	for i, img := range s.images {
-		// Deep copy the struct to avoid shared map references during JSON encoding
-		snapshot[i] = img
-		if img.ProcessingFlags != nil {
-			flags := make(map[string]bool)
-			for k, v := range img.ProcessingFlags {
-				flags[k] = v
-			}
-			snapshot[i].ProcessingFlags = flags
-		}
-		if img.DerivativePaths != nil {
-			paths := make(map[string]string)
-			for k, v := range img.DerivativePaths {
-				paths[k] = v
-			}
-			snapshot[i].DerivativePaths = paths
-		}
-		if img.Tuning != nil {
-			tuning := make(map[string]provider.TuningOptions)
-			for k, v := range img.Tuning {
-				tuning[k] = v
-			}
-			snapshot[i].Tuning = tuning
-		}
-	}
+	snap := s.snapshotLocked()
 	s.mu.RUnlock()
-
-	s.saveCacheInternal(snapshot)
-}
-
-func (s *ImageStore) saveCacheInternal(images []provider.Image) {
-	if s.saveFunc != nil {
-		s.saveFunc()
-	}
-
-	if s.cachePath == "" {
-		return
-	}
-
-	tmp := s.cachePath + ".tmp"
-	file, err := os.Create(tmp)
-	if err != nil {
-		log.Printf("Store: Failed to save cache: %v", err)
-		return
-	}
-
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(images); err != nil {
-		file.Close()
-		log.Printf("Store: Failed to encode cache: %v", err)
-		return
-	}
-	file.Close()
-
-	if err := os.Rename(tmp, s.cachePath); err != nil {
-		log.Printf("Store: Failed to rename cache: %v", err)
-	}
+	return s.writeSnapshot(snap)
 }
 
 // GetIDsForResolution returns a list of IDs compatible with the given resolution.
@@ -735,6 +793,7 @@ const (
 	ImageActionKeep       ImageSyncAction = iota
 	ImageActionDelete                     // Prune: Delete everything (Master + Derivatives)
 	ImageActionInvalidate                 // Refresh: Delete only derivatives (Keep Master)
+	ImageActionRetain                     // Leave rotation: keep Master as a retained entry
 )
 
 func (s *ImageStore) Sync(limit int, targetFlags map[string]bool, activeQueryIDs map[string]bool) {
@@ -765,6 +824,7 @@ func (s *ImageStore) Sync(limit int, targetFlags map[string]bool, activeQueryIDs
 	var finalImages []provider.Image
 	var idsToDelete []string
 	var idsToInvalidate []string
+	var toRetain []provider.Image
 
 	// 2. Apply Actions (Delete/Invalidate)
 	for _, img := range s.images {
@@ -775,7 +835,17 @@ func (s *ImageStore) Sync(limit int, targetFlags map[string]bool, activeQueryIDs
 		}
 
 		if action == ImageActionInvalidate {
-			// Invalidate: Keep Master, Reset Flags/Paths
+			// Live re-check: a job may own the image (its result carries the current
+			// settings) or may already have replaced it with matching derivatives.
+			if s.leases[img.ID] || s.deleting[img.ID] || s.derivDeleting[img.ID] || (len(targetFlags) > 0 && s.flagsMatch(img, targetFlags)) {
+				finalImages = append(finalImages, img)
+				continue
+			}
+			// Invalidate: Keep Master, Reset Flags/Paths. The derivative files are deleted
+			// under a delete claim taken right here, so no job can reuse or publish them
+			// until they are gone (cache_lease.go).
+			s.removeFromBucketsLocked(img.ID, img.DerivativePaths)
+			s.derivDeleting[img.ID] = true
 			img.DerivativePaths = make(map[string]string)
 			img.ProcessingFlags = make(map[string]bool)
 			for k, v := range targetFlags {
@@ -783,6 +853,9 @@ func (s *ImageStore) Sync(limit int, targetFlags map[string]bool, activeQueryIDs
 			}
 			finalImages = append(finalImages, img)
 			idsToInvalidate = append(idsToInvalidate, img.ID)
+		} else if action == ImageActionRetain {
+			toRetain = append(toRetain, img)
+			delete(s.idSet, img.ID)
 		} else {
 			// ActionDelete
 			idsToDelete = append(idsToDelete, img.ID)
@@ -795,8 +868,10 @@ func (s *ImageStore) Sync(limit int, targetFlags map[string]bool, activeQueryIDs
 		excess := len(finalImages) - limit
 		toPrune := finalImages[:excess]
 		finalImages = finalImages[excess:]
+		// Over the rotation limit: keep the masters as retained entries; the disk
+		// budget decides when their bytes are actually reclaimed.
+		toRetain = append(toRetain, toPrune...)
 		for _, img := range toPrune {
-			idsToDelete = append(idsToDelete, img.ID)
 			delete(s.idSet, img.ID)
 		}
 	}
@@ -804,11 +879,35 @@ func (s *ImageStore) Sync(limit int, targetFlags map[string]bool, activeQueryIDs
 	// 4. Update State
 	s.images = finalImages
 	s.rebuildInternalStateLocked()
+	retainedIDs := s.retainLocked(toRetain, false)
+
+	// 4b. Retained entries processed under other settings: their rejection tags and
+	// derivatives are stale. Reset their flags (dropping "incompatible:" tags) and delete
+	// their derivatives under a claim, like active invalidation.
+	if len(targetFlags) > 0 {
+		for id, e := range s.retained {
+			if s.leases[id] || s.deleting[id] || s.derivDeleting[id] || s.flagsMatch(e.Image, targetFlags) {
+				continue
+			}
+			flags := make(map[string]bool, len(targetFlags))
+			for k, v := range targetFlags {
+				flags[k] = v
+			}
+			e.Image.ProcessingFlags = flags
+			if !e.DerivativesCleared {
+				s.derivDeleting[id] = true
+				idsToInvalidate = append(idsToInvalidate, id)
+			}
+			s.retained[id] = e
+		}
+	}
 	s.scheduleSaveLocked()
 	s.mu.Unlock()
 
+	s.refreshRetainedSizes(retainedIDs)
+
 	// 5. Async Cleanup
-	log.Debugf("[Sync] Completed. Final Count: %d. Deleting: %d. Invalidating: %d.", len(finalImages), len(idsToDelete), len(idsToInvalidate))
+	log.Debugf("[Sync] Completed. Final Count: %d. Deleting: %d. Invalidating: %d. Retaining: %d.", len(finalImages), len(idsToDelete), len(idsToInvalidate), len(retainedIDs))
 	if len(idsToDelete) > 0 {
 		log.Debugf("[Sync] Deleting IDs: %v", idsToDelete)
 	}
@@ -824,8 +923,11 @@ func (s *ImageStore) determineSyncAction(img provider.Image, activeQueryIDs map[
 		isActive := img.SourceQueryID != "" && activeQueryIDs[img.SourceQueryID]
 		isOrphan := img.SourceQueryID == ""
 		if isOrphan || !isActive {
-			log.Debugf("[Sync] Marking %s for deletion. Orphan: %v, ActiveSource: %v (SourceID: '%s')", img.ID, isOrphan, isActive, img.SourceQueryID)
-			return ImageActionDelete
+			if s.avoidSet[img.ID] {
+				return ImageActionDelete
+			}
+			log.Debugf("[Sync] Removing %s from rotation (retaining master). Orphan: %v, ActiveSource: %v (SourceID: '%s')", img.ID, isOrphan, isActive, img.SourceQueryID)
+			return ImageActionRetain
 		}
 	}
 
@@ -939,11 +1041,10 @@ func (s *ImageStore) performAsyncCleanup(idsToDelete, idsToInvalidate []string) 
 	if s.fm == nil {
 		return
 	}
-	if len(idsToDelete) > 0 {
-		s.fm.AsyncDeepDeleteBatch(idsToDelete)
-	}
+	s.asyncDeleteUnownedIDs(idsToDelete)
 	if len(idsToInvalidate) > 0 {
-		s.fm.AsyncDeleteDerivativesBatch(idsToInvalidate)
+		ids := append([]string(nil), idsToInvalidate...)
+		s.fm.runAsync(func() { s.finishInvalidation(ids) })
 	}
 }
 
@@ -1005,6 +1106,30 @@ func (s *ImageStore) migrateLegacyIDsLocked() bool {
 				migrationOccurred = true
 			}
 		}
+	}
+
+	// Retained entries carry the same legacy IDs (and files) and are migrated alike.
+	for oldID, e := range s.retained {
+		p := e.Image.Provider
+		if p == "" {
+			p = e.Provider
+		}
+		if p == "" || p == "Favorites" || strings.HasPrefix(oldID, p+"_") {
+			continue
+		}
+		newID := p + "_" + oldID
+		log.Printf("Migration: Upgrading legacy retained image ID %s -> %s for provider %s", oldID, newID, p)
+		if s.fm != nil {
+			if err := s.fm.RenameAllAssets(oldID, newID); err != nil {
+				log.Printf("Migration: Failed to rename assets for %s: %v", oldID, err)
+			}
+		}
+		delete(s.retained, oldID)
+		e.Image.ID = newID
+		if _, exists := s.retained[newID]; !exists {
+			s.retained[newID] = e
+		}
+		migrationOccurred = true
 	}
 	return migrationOccurred
 }

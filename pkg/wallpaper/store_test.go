@@ -199,13 +199,14 @@ func TestStoreSync_Grooming(t *testing.T) {
 	img0, _ := store.Get(0)
 	assert.Equal(t, "middle", img0.ID)
 
-	// Verify File Deletion
-	// Verify File Deletion (Validation works async with pacer)
+	// Over the rotation limit, the oldest image leaves rotation but its master is
+	// retained on disk (bytes are reclaimed by disk-budget eviction, not by Sync).
 	oldestPath, _ := fm.GetMasterPath("oldest", ".jpg")
-	assert.Eventually(t, func() bool {
-		_, err := os.Stat(oldestPath)
-		return os.IsNotExist(err)
-	}, 2*time.Second, 100*time.Millisecond, "Oldest file should be deleted")
+	_, err := os.Stat(oldestPath)
+	assert.NoError(t, err, "Oldest master should be retained on disk")
+	entry, retained := store.GetRetained("oldest")
+	assert.True(t, retained, "Oldest should be in the retained index")
+	assert.Equal(t, int64(len("oldest")), entry.Bytes)
 }
 
 func TestStoreSync_CacheInvalidation(t *testing.T) {
@@ -352,12 +353,15 @@ func TestRemoveByQueryID(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, "img2", remaining.ID)
 
-	// Verify file deletion (Async)
-	assert.Eventually(t, func() bool {
-		_, err1 := os.Stat(img1.FilePath)
-		_, err3 := os.Stat(img3.FilePath)
-		return os.IsNotExist(err1) && os.IsNotExist(err3)
-	}, 2*time.Second, 100*time.Millisecond, "Files for q1 should be deleted")
+	// Masters for q1 stay on disk as retained entries (removed from rotation only)
+	for _, img := range []provider.Image{img1, img3} {
+		_, err := os.Stat(img.FilePath)
+		assert.NoError(t, err, "%s master should be retained on disk", img.ID)
+		_, retained := store.GetRetained(img.ID)
+		assert.True(t, retained, "%s should be in the retained index", img.ID)
+	}
+	_, retained2 := store.GetRetained("img2")
+	assert.False(t, retained2, "img2 is still active, not retained")
 
 	// Verify q2 file remains
 	_, err2 := os.Stat(img2.FilePath)
@@ -416,12 +420,11 @@ func TestStoreSync_StrictPruning(t *testing.T) {
 	// Expect img2 to be gone from store
 	assert.False(t, known["img2"])
 
-	// Verify File Deletion
-	// img2 file should be deleted (Sync does it inline/deep delete)
-	assert.Eventually(t, func() bool {
-		_, err := os.Stat(img2.FilePath)
-		return os.IsNotExist(err)
-	}, 2*time.Second, 100*time.Millisecond, "File should be deleted asynchronously")
+	// img2's master leaves rotation but is retained on disk
+	_, err := os.Stat(img2.FilePath)
+	assert.NoError(t, err, "Inactive query's master should be retained on disk")
+	_, retained := store.GetRetained("img2")
+	assert.True(t, retained)
 }
 
 // TestStore_LoadAvoidSet_And_Clear verifies that:

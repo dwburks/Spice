@@ -109,9 +109,8 @@ func (wp *Plugin) checkAndRunRefresh(now time.Time, lastRefreshDay int, isInitia
 		log.Print("Nightly Maintenance: Starting cache grooming...")
 		wp.syncStoreWithConfig()
 
-		// Cleanup Orphans (Delete unknown files)
-		// We get known IDs from store (thread-safe)
-		wp.fm.CleanupOrphans(wp.store.GetKnownIDs())
+		// Cleanup Orphans (delete unknown files) and evict retained masters to the disk budget
+		wp.runCacheMaintenance(true)
 		log.Print("Nightly Maintenance: Grooming Finished.")
 
 		// Trigger app update check (callback handles preference check + network call)

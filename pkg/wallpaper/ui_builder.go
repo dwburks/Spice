@@ -111,11 +111,35 @@ func (b *PrefsPanelBuilder) BuildGeneralTabSchema() *schema.PanelSchema {
 						Label:        i18n.T("Cache Size:"),
 						Help:         i18n.T("Set how many images to cache for faster startup and less network usage. Set to \"None\" to disable caching."),
 						Options:      setting.StringOptions(GetCacheSizes()),
-						InitialValue: int(b.plugin.cfg.GetCacheSize()),
+						InitialValue: b.plugin.cfg.GetCacheSizeIndex(),
 						ApplyFunc: func(val interface{}) {
-							size := CacheSize(val.(int))
-							b.plugin.cfg.SetCacheSize(size)
+							b.plugin.cfg.SetCacheSizeIndex(val.(int))
 						},
+					},
+					schema.SelectItem{
+						Name:         "maxDownloadSize",
+						Label:        i18n.T("Max Download Size:"),
+						Help:         i18n.T("Images larger than this are skipped and never downloaded, to save bandwidth and disk space."),
+						Options:      MaxDownloadSizeOptionLabels(),
+						InitialValue: b.plugin.cfg.GetMaxDownloadSizeIndex(),
+						ApplyFunc: func(val interface{}) {
+							b.plugin.ApplyMaxDownloadSizeIndex(val.(int))
+						},
+					},
+					schema.SelectItem{
+						Name:         "cacheDiskSpace",
+						Label:        i18n.T("Cache Disk Space:"),
+						Help:         i18n.T("Disk space for downloaded originals. Images in rotation are always kept; images kept for reuse are removed oldest first when the cache grows past this size."),
+						Options:      CacheDiskBudgetOptionLabels(),
+						InitialValue: b.plugin.cfg.GetCacheDiskBudgetIndex(),
+						ApplyFunc: func(val interface{}) {
+							b.plugin.ApplyCacheDiskBudgetIndex(val.(int))
+						},
+					},
+					schema.LabelItem{
+						ID:         "cacheDiskUsage",
+						Text:       b.plugin.CacheUsageSummary(),
+						Importance: schema.ImportanceLow,
 					},
 				},
 			},

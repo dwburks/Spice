@@ -671,6 +671,16 @@ func (c *Config) SetCacheSize(size CacheSize) {
 	c.SetInt(CacheSizePrefKey, int(size))
 }
 
+// GetCacheSizeIndex returns the Cache Size dropdown index for the stored cache size.
+func (c *Config) GetCacheSizeIndex() int {
+	return CacheSizeToIndex(c.GetCacheSize())
+}
+
+// SetCacheSizeIndex stores the cache size chosen at dropdown index i (as its enum value).
+func (c *Config) SetCacheSizeIndex(i int) {
+	c.SetCacheSize(IndexToCacheSize(i))
+}
+
 func (cfg *Config) GetMuseumCollectionOTA() bool {
 	return cfg.BoolWithFallback("museum_collection_ota", true) // Default to true
 }
@@ -1576,6 +1586,86 @@ func (c *Config) GetMaxConcurrentProcessors() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.IntWithFallback(MaxConcurrentProcessorsPrefKey, 0)
+}
+
+// GetCacheDiskBudgetBytes returns the disk budget for master files (active + retained) in bytes.
+func (c *Config) GetCacheDiskBudgetBytes() int64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	mb := c.IntWithFallback(CacheDiskBudgetMBPrefKey, DefaultCacheDiskBudgetMB)
+	if mb <= 0 {
+		mb = DefaultCacheDiskBudgetMB
+	}
+	return int64(mb) * bytesPerMB
+}
+
+// SetCacheDiskBudgetMB sets the disk budget for master files in megabytes.
+func (c *Config) SetCacheDiskBudgetMB(mb int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.SetInt(CacheDiskBudgetMBPrefKey, mb)
+}
+
+// GetCacheDiskBudgetIndex returns the index into CacheDiskBudgetOptionsMB of the current
+// budget (the default's index if the stored value is not one of the options).
+func (c *Config) GetCacheDiskBudgetIndex() int {
+	mb := int(c.GetCacheDiskBudgetBytes() / bytesPerMB)
+	return optionIndex(CacheDiskBudgetOptionsMB, mb, DefaultCacheDiskBudgetMB)
+}
+
+// SetCacheDiskBudgetIndex stores the budget option at index i (ignored if out of range).
+func (c *Config) SetCacheDiskBudgetIndex(i int) {
+	if i >= 0 && i < len(CacheDiskBudgetOptionsMB) {
+		c.SetCacheDiskBudgetMB(CacheDiskBudgetOptionsMB[i])
+	}
+}
+
+// GetMaxDownloadSizeBytes returns the largest original image size Spice will download, in
+// bytes. 0 means no limit.
+func (c *Config) GetMaxDownloadSizeBytes() int64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	mb := c.IntWithFallback(MaxDownloadSizeMBPrefKey, DefaultMaxDownloadSizeMB)
+	if mb < 0 {
+		mb = DefaultMaxDownloadSizeMB
+	}
+	return int64(mb) * bytesPerMB
+}
+
+// SetMaxDownloadSizeMB sets the largest original image size Spice will download, in
+// megabytes. 0 means no limit.
+func (c *Config) SetMaxDownloadSizeMB(mb int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.SetInt(MaxDownloadSizeMBPrefKey, mb)
+}
+
+// GetMaxDownloadSizeIndex returns the index into MaxDownloadSizeOptionsMB of the current cap.
+func (c *Config) GetMaxDownloadSizeIndex() int {
+	mb := int(c.GetMaxDownloadSizeBytes() / bytesPerMB)
+	return optionIndex(MaxDownloadSizeOptionsMB, mb, DefaultMaxDownloadSizeMB)
+}
+
+// SetMaxDownloadSizeIndex stores the cap option at index i (ignored if out of range).
+func (c *Config) SetMaxDownloadSizeIndex(i int) {
+	if i >= 0 && i < len(MaxDownloadSizeOptionsMB) {
+		c.SetMaxDownloadSizeMB(MaxDownloadSizeOptionsMB[i])
+	}
+}
+
+// optionIndex finds value in options, falling back to the index of def.
+func optionIndex(options []int, value, def int) int {
+	for i, v := range options {
+		if v == value {
+			return i
+		}
+	}
+	for i, v := range options {
+		if v == def {
+			return i
+		}
+	}
+	return 0
 }
 
 // AddNationalPalaceMuseumQuery adds a new National Palace Museum query.

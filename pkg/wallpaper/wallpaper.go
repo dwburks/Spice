@@ -110,6 +110,9 @@ type Plugin struct {
 	queryCancelFuncs map[string]context.CancelFunc
 	queryCancelMu    sync.Mutex
 
+	// Image IDs whose download was aborted this session for exceeding the size cap
+	oversizedIDs sync.Map // string (imageID) -> bool
+
 	// Rate limiters for PacedProviders
 	apiLimiters     sync.Map // string (providerID) -> *rate.Limiter
 	processLimiters sync.Map // string (providerID) -> *rate.Limiter
@@ -411,12 +414,6 @@ func (wp *Plugin) Activate() {
 	// Reconcile favorite flags against live data to prevent ghost favorites
 	wp.reconcileFavorites()
 
-	// Perform an initial scan to catch and delete any stranded/orphaned files
-	// caused by file-locking errors or crashes during the previous session.
-	if wp.fm != nil {
-		wp.fm.AsyncCleanupOrphans(wp.store.GetKnownIDs())
-	}
-
 	// Initialize Monitors (Actors)
 	monitors, err := wp.os.GetMonitors()
 	if err != nil {
@@ -470,8 +467,14 @@ func (wp *Plugin) Activate() {
 	}
 	wp.monMu.Unlock()
 
-	wp.syncStoreWithConfig()
+	// Blocklist first, so Sync deletes blocked images instead of retaining them.
 	wp.store.LoadAvoidSet(wp.cfg.GetAvoidSet())
+	wp.syncStoreWithConfig()
+
+	// Initial scan: delete stranded/orphaned files left by file-locking errors or crashes
+	// in the previous session, then evict retained masters down to the disk budget.
+	// Runs after the monitors exist so images on screen are protected.
+	wp.scheduleCacheMaintenance(true)
 
 	workers := runtime.NumCPU()
 	if wp.cfg != nil && wp.cfg.MaxConcurrentProcessors > 0 {
@@ -1377,9 +1380,9 @@ func (wp *Plugin) saveQueryPages() {
 }
 
 func (wp *Plugin) onQueryRemoved(queryID string) {
-	log.Debugf("Plugin: Query %s removed. Clearing...", queryID)
+	log.Debugf("Plugin: Query %s removed. Removing its images from rotation (masters retained)...", queryID)
 	wp.CancelQueryContext(queryID)
-	wp.store.RemoveByQueryID(queryID)
+	wp.removeQueryFromRotation(queryID, true)
 	wp.downloadMutex.Lock()
 	delete(wp.queryPages, queryID)
 	wp.downloadMutex.Unlock()
@@ -1387,9 +1390,9 @@ func (wp *Plugin) onQueryRemoved(queryID string) {
 
 // onQueryURLChanged discards everything fetched for a query's previous URL and restarts it at page 1.
 func (wp *Plugin) onQueryURLChanged(queryID string) {
-	log.Debugf("Plugin: Query %s URL changed. Clearing stale images...", queryID)
+	log.Debugf("Plugin: Query %s URL changed. Removing stale images from rotation (masters retained)...", queryID)
 	wp.CancelQueryContext(queryID)
-	wp.store.RemoveByQueryID(queryID)
+	wp.removeQueryFromRotation(queryID, true)
 	wp.downloadMutex.Lock()
 	delete(wp.queryPages, queryID)
 	wp.downloadMutex.Unlock()
@@ -1403,9 +1406,9 @@ func (wp *Plugin) onQueryURLChanged(queryID string) {
 }
 
 func (wp *Plugin) onQueryDisabled(queryID string) {
-	log.Debugf("[Plugin] Query %s disabled. Clearing from cache/rotation...", queryID)
+	log.Debugf("[Plugin] Query %s disabled. Removing from rotation (masters retained)...", queryID)
 	wp.CancelQueryContext(queryID)
-	wp.store.RemoveByQueryID(queryID)
+	wp.removeQueryFromRotation(queryID, false)
 
 	// DO NOT delete wp.queryPages[queryID] here so that if the query is re-enabled,
 	// it resumes from the next page instead of restarting at Page 1 forever.
@@ -1418,8 +1421,8 @@ func (wp *Plugin) onQueryDisabled(queryID string) {
 }
 
 func (wp *Plugin) onQueryEnabled(queryID string) {
-	log.Debugf("[Plugin] Query %s enabled. Triggering immediate fetch...", queryID)
-	go wp.RequestFetch()
+	log.Debugf("[Plugin] Query %s enabled. Re-admitting retained images and triggering fetch...", queryID)
+	go wp.reenableQuery(queryID)
 }
 
 func (wp *Plugin) ResetFavorites() {

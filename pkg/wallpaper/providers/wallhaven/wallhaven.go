@@ -359,6 +359,7 @@ func (p *Provider) FetchImages(ctx context.Context, apiURL string, page int) ([]
 			FileType:    item.FileType,
 			Width:       item.DimensionX,
 			Height:      item.DimensionY,
+			FileSize:    item.FileSize,
 		})
 	}
 
@@ -442,6 +443,7 @@ type ImgSrvcImage struct {
 	Ratio      string   `json:"ratio"`
 	DimensionX int      `json:"dimension_x"`
 	DimensionY int      `json:"dimension_y"`
+	FileSize   int64    `json:"file_size"`
 	Thumbs     Thumbs   `json:"thumbs"`
 	Uploader   Uploader `json:"uploader"`
 }

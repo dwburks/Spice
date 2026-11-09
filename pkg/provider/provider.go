@@ -139,6 +139,8 @@ type Image struct {
 	SourceQueryID    string                   // ID of the query that produced this image (for smart cache clearing)
 	Width            int                      // Image Width (if available from source)
 	Height           int                      // Image Height (if available from source)
+	FileSize         int64                    `json:",omitempty"` // Size of the original file in bytes, if the source reports it (0 = unknown)
+	Enriched         bool                     `json:",omitempty"` // True once provider enrichment succeeded (cached copies can then skip it)
 	Tuning           map[string]TuningOptions `json:",omitempty"` // Per-resolution tuning overrides (key = "WxH", e.g. "3440x1440")
 	IsFavorited      bool                     // Flag to protect image from cache pruning
 	Seen             bool                     // Flag for pagination/history logic

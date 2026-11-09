@@ -24,44 +24,77 @@ func (wp *Plugin) ProcessImageJob(ctx context.Context, job DownloadJob) (resultI
 	img := job.Image
 	downloadProvider := job.Provider
 
-	// Prevent orphaned files from leaking by ensuring partial processing artifacts are scrubbed.
-	// If context is cancelled midway through downloading/processing, we aggressively clean up
-	// any master or derivative files we just wrote instead of waiting for the nightly sweep.
-	defer func() {
-		if finalErr != nil && wp.fm != nil {
-			log.Debugf("Job failed for %s (Err: %v), cleaning up artifacts...", img.ID, finalErr)
-			_ = wp.fm.DeepDelete(img.ID)
-		}
-	}()
-
 	if wp.cfg.InAvoidSet(img.ID) {
 		return provider.Image{}, fmt.Errorf("image %s is in avoid set", img.ID)
 	}
 
-	// 0. Early Filtering (Optimization)
+	// 0. Ownership first: decide whether this job reuses files that already belong to the
+	// retained index or the active store BEFORE any early return, so failure cleanup never
+	// deletes files this job did not create (reuse before API: no enrichment, no download).
+	reuse := wp.reuseCachedMaster(&img)
+	masterPath := reuse.masterPath
+	var created jobArtifacts
+
+	// Prevent orphaned files from leaking by ensuring partial processing artifacts are scrubbed.
+	// If context is cancelled midway through downloading/processing, we aggressively clean up
+	// any master or derivative files we just wrote instead of waiting for the nightly sweep.
+	defer func() {
+		if finalErr != nil {
+			wp.cleanupFailedJob(img, reuse, &created, finalErr)
+		}
+	}()
+
+	if reuse.ok {
+		log.Debugf("Reusing cached master for %s (no download).", img.ID)
+		// A cached copy whose enrichment soft-failed gets one more try when a provider is
+		// available (a ReuseOnly re-admission has none and stays network-free).
+		if !img.Enriched && downloadProvider != nil {
+			img = wp.enrichImage(ctx, img, downloadProvider)
+		}
+	} else if job.ReuseOnly {
+		// Re-admission from the retained index, but the master is gone: let a normal
+		// fetch download it again rather than doing unpaced network work here.
+		return provider.Image{}, fmt.Errorf("retained master for %s is no longer on disk", img.ID)
+	}
+
+	// 0b. Early Filtering (Optimization)
 	if err := wp.checkImageCompatibility(img); err != nil {
 		return provider.Image{}, err
 	}
 
-	// 1. Lazy Enrichment (Soft Fail)
-	// (API pacing is automatically handled upstream by the Fair Scheduler Dispatcher)
-	if downloadProvider != nil {
-		log.Debugf("Enriching image %s...", img.ID)
-	}
-	img = wp.enrichImage(ctx, img, downloadProvider)
-
-	// 2. Ensure Master (Raw Image)
-	// (Download pacing is automatically handled upstream by the Fair Scheduler Dispatcher)
-	if downloadProvider != nil {
-		log.Debugf("Downloading/Ensuring raw master image %s...", img.ID)
-	}
-	masterPath, err := wp.ensureMaster(ctx, img, downloadProvider)
-	if err != nil {
-		providerName := "Unknown"
-		if downloadProvider != nil {
-			providerName = downloadProvider.ID()
+	if !reuse.ok {
+		// Size cap known before any request (provider reported the file size).
+		if wp.knownOversized(img) {
+			return provider.Image{}, fmt.Errorf("%w: %s (%d bytes)", ErrDownloadTooLarge, img.ID, img.FileSize)
 		}
-		return provider.Image{}, fmt.Errorf("failed to ensure master (%s): %w", providerName, err)
+
+		// 1. Lazy Enrichment (Soft Fail)
+		// (API pacing is automatically handled upstream by the Fair Scheduler Dispatcher)
+		if downloadProvider != nil {
+			log.Debugf("Enriching image %s...", img.ID)
+		}
+		img = wp.enrichImage(ctx, img, downloadProvider)
+
+		// 2. Ensure Master (Raw Image)
+		// (Download pacing is automatically handled upstream by the Fair Scheduler Dispatcher)
+		if downloadProvider != nil {
+			log.Debugf("Downloading/Ensuring raw master image %s...", img.ID)
+		}
+		var err error
+		masterPath, created.master, err = wp.ensureMaster(ctx, img, downloadProvider)
+		if created.master {
+			created.masterPath = masterPath
+		}
+		if err != nil {
+			if errors.Is(err, ErrDownloadTooLarge) {
+				wp.oversizedIDs.Store(img.ID, true)
+			}
+			providerName := "Unknown"
+			if downloadProvider != nil {
+				providerName = downloadProvider.ID()
+			}
+			return provider.Image{}, fmt.Errorf("failed to ensure master (%s): %w", providerName, err)
+		}
 	}
 
 	// 2.5 Resolution Probing & Persistence (Fixes "Ghost Dimensions")
@@ -105,7 +138,7 @@ func (wp *Plugin) ProcessImageJob(ctx context.Context, job DownloadJob) (resultI
 	// lands in the store via stateManagerLoop (Add or Update fallback).
 
 	if incompatibleCount == len(resolutions) && len(resolutions) > 0 {
-		return img, fmt.Errorf("incompatible image skipped (fits zero monitors)")
+		return wp.rejectIncompatible(img, reuse)
 	}
 
 	// 3. Ensure Derivative (Processed Image)
@@ -124,9 +157,16 @@ func (wp *Plugin) ProcessImageJob(ctx context.Context, job DownloadJob) (resultI
 	img.ProcessingFlags["FaceCrop"] = wp.cfg.GetFaceCropEnabled()
 	img.ProcessingFlags["FaceBoost"] = wp.cfg.GetFaceBoostEnabled()
 
-	derivativePaths, err := wp.ensureDerivative(ctx, img, masterPath)
+	derivativePaths, err := wp.ensureDerivativeTracked(ctx, img, masterPath, &created.derivatives)
 	if err != nil {
-		return img, fmt.Errorf("failed to ensure derivative: %w", err)
+		if ctx.Err() == nil && taggedIncompatibleWithAll(img, resolutions) {
+			// Every resolution rejected the image while fitting: a property of the image.
+			return wp.rejectIncompatible(img, reuse)
+		}
+		// I/O, decode, cancellation...: not a property of the image. Admit or replace
+		// nothing; the owner (retained index or active store) keeps its record, and
+		// cleanupFailedJob removes only what this job created (or a corrupt master).
+		return provider.Image{}, fmt.Errorf("failed to ensure derivative: %w", err)
 	}
 
 	// Return updated image pointing to the derivative (for display)
@@ -144,7 +184,10 @@ func (wp *Plugin) ProcessImageJob(ctx context.Context, job DownloadJob) (resultI
 		}
 	}
 
-	if wp.favoriter != nil && wp.favoriter.IsFavorited(img) {
+	if reuse.ok {
+		// Cached favorite flags may be stale (favorites cleared or changed meanwhile).
+		img.IsFavorited = wp.favoriter != nil && wp.favoriter.IsFavorited(img)
+	} else if wp.favoriter != nil && wp.favoriter.IsFavorited(img) {
 		img.IsFavorited = true
 	}
 
@@ -242,31 +285,25 @@ func (wp *Plugin) enrichImage(ctx context.Context, img provider.Image, p provide
 		enrichedImg.ID = originalID
 	}
 
+	enrichedImg.Enriched = true
 	return enrichedImg
 }
 
 // ensureMaster ensures the raw image is on disk.
 // Returns absolute path.
-func (wp *Plugin) ensureMaster(ctx context.Context, img provider.Image, imgProvider provider.ImageProvider) (string, error) {
+func (wp *Plugin) ensureMaster(ctx context.Context, img provider.Image, imgProvider provider.ImageProvider) (string, bool, error) {
 	// Determine extension. We prefer what's in URL or Content-Type.
-	ext := filepath.Ext(extractFilenameFromURL(img.Path))
-	if ext == "" {
-		if img.FileType == "image/png" {
-			ext = ".png"
-		} else {
-			ext = ".jpg" // Default
-		}
-	}
+	ext := masterExtFor(img)
 
 	masterPath, err := wp.fm.GetMasterPath(img.ID, ext)
 	if err != nil {
-		return "", fmt.Errorf("security check failed for master path: %w", err)
+		return "", false, fmt.Errorf("security check failed for master path: %w", err)
 	}
 
 	// Check existence
 	if _, err := os.Stat(masterPath); !os.IsNotExist(err) {
 		// Exists.
-		return masterPath, nil
+		return masterPath, false, nil
 	}
 
 	// Download Remote URL
@@ -285,7 +322,8 @@ func (wp *Plugin) ensureMaster(ctx context.Context, img provider.Image, imgProvi
 		}
 	}
 
-	return wp.downloadMasterFile(ctx, client, reqUrl, masterPath, imgProvider)
+	path, err := wp.downloadMasterFile(ctx, client, reqUrl, masterPath, imgProvider)
+	return path, err == nil, err
 }
 
 func (wp *Plugin) downloadMasterFile(ctx context.Context, client *http.Client, reqUrl, masterPath string, imgProvider provider.ImageProvider) (string, error) {
@@ -318,18 +356,53 @@ func (wp *Plugin) downloadMasterFile(ctx context.Context, client *http.Client, r
 		return "", fmt.Errorf("failed to ensure master (%s): status %d", providerName, resp.StatusCode)
 	}
 
-	file, err := os.Create(masterPath)
+	// Size cap: refuse before reading the body when the server declares the size.
+	maxBytes := wp.maxDownloadBytes()
+	if maxBytes > 0 && resp.ContentLength > maxBytes {
+		log.Printf("Skipping download of %s: %d bytes exceeds the %d MB limit.", filepath.Base(masterPath), resp.ContentLength, maxBytes/bytesPerMB)
+		return "", fmt.Errorf("%w: %d bytes", ErrDownloadTooLarge, resp.ContentLength)
+	}
+
+	// Write to a temp file in the same directory and rename into place only on success,
+	// so a partial or oversized transfer never looks like a valid master.
+	dir := filepath.Dir(masterPath)
+	file, err := os.CreateTemp(dir, filepath.Base(masterPath)+".*"+tempDownloadSuffix)
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+	tmpPath := file.Name()
 
-	if _, err := io.Copy(file, resp.Body); err != nil {
-		file.Close() // Close before attempting removal
-		if err := os.Remove(masterPath); err != nil && !os.IsNotExist(err) {
-			log.Printf("Failed to clean up aborted download %s: %v", masterPath, err)
+	var body io.Reader = resp.Body
+	if maxBytes > 0 {
+		body = io.LimitReader(resp.Body, maxBytes+1) // +1 detects bodies over the cap
+	}
+	n, copyErr := io.Copy(file, body)
+	closeErr := file.Close() // Close before rename/remove (required on Windows)
+	if copyErr == nil && maxBytes > 0 && n > maxBytes {
+		log.Printf("Aborted download of %s: body exceeds the %d MB limit.", filepath.Base(masterPath), maxBytes/bytesPerMB)
+		copyErr = fmt.Errorf("%w: more than %d bytes", ErrDownloadTooLarge, maxBytes)
+	}
+	if copyErr == nil {
+		copyErr = closeErr
+	}
+	if copyErr != nil {
+		if err := os.Remove(tmpPath); err != nil && !os.IsNotExist(err) {
+			log.Printf("Failed to clean up aborted download %s: %v", tmpPath, err)
 		}
-		return "", err
+		return "", copyErr
+	}
+	_ = os.Chmod(tmpPath, 0644) // CreateTemp uses 0600; keep masters as before
+
+	// os.Rename replaces an existing file on every OS (MoveFileEx with
+	// MOVEFILE_REPLACE_EXISTING on Windows). On Windows it fails if the destination is
+	// open; every master is written through this path, so an existing destination is a
+	// complete file from a concurrent job and is just as good.
+	if err := os.Rename(tmpPath, masterPath); err != nil {
+		_ = os.Remove(tmpPath)
+		if info, statErr := os.Stat(masterPath); statErr == nil && !info.IsDir() {
+			return masterPath, nil
+		}
+		return "", fmt.Errorf("failed to move download into place: %w", err)
 	}
 
 	return masterPath, nil
@@ -367,6 +440,12 @@ func (wp *Plugin) getBaseDerivativeDir() string {
 // ensureDerivative ensures the processed image exists for all detected monitor resolutions.
 // Returns a map of resolution "WxH" -> absolute path.
 func (wp *Plugin) ensureDerivative(ctx context.Context, img provider.Image, masterPath string) (map[string]string, error) {
+	return wp.ensureDerivativeTracked(ctx, img, masterPath, nil)
+}
+
+// ensureDerivativeTracked is ensureDerivative that appends every derivative file it
+// creates to created (when non-nil), so a failed job removes only its own files.
+func (wp *Plugin) ensureDerivativeTracked(ctx context.Context, img provider.Image, masterPath string, created *[]string) (map[string]string, error) {
 	derivativeDir := wp.getBaseDerivativeDir()
 	if derivativeDir == "" {
 		return map[string]string{"primary": masterPath}, nil
@@ -382,7 +461,7 @@ func (wp *Plugin) ensureDerivative(ctx context.Context, img provider.Image, mast
 	}
 
 	// 2. Generate Missing
-	if err := wp.generateMissingDerivatives(ctx, img, masterPath, derivativeDir, ext, resolutions, paths); err != nil {
+	if err := wp.generateMissingDerivatives(ctx, img, masterPath, derivativeDir, ext, resolutions, paths, created); err != nil {
 		return nil, err
 	}
 
@@ -431,10 +510,10 @@ func (wp *Plugin) checkExistingDerivatives(imgID, ext, derivativeDir string, res
 	return paths, allExist
 }
 
-func (wp *Plugin) generateMissingDerivatives(ctx context.Context, img provider.Image, masterPath, derivativeDir, ext string, resolutions []Resolution, paths map[string]string) error {
-	srcImg, err := imaging.Open(masterPath)
+func (wp *Plugin) generateMissingDerivatives(ctx context.Context, img provider.Image, masterPath, derivativeDir, ext string, resolutions []Resolution, paths map[string]string, created *[]string) error {
+	srcImg, err := openMaster(masterPath)
 	if err != nil {
-		return fmt.Errorf("failed to open master %s: %w", masterPath, err)
+		return err
 	}
 
 	for _, res := range resolutions {
@@ -502,7 +581,11 @@ func (wp *Plugin) generateMissingDerivatives(ctx context.Context, img provider.I
 
 		if err := imaging.Save(processedImg, targetPath); err != nil {
 			log.Printf("Error saving derivative %s: %v", targetPath, err)
+			_ = os.Remove(targetPath) // Do not leave a partial file behind
 			continue
+		}
+		if created != nil {
+			*created = append(*created, targetPath)
 		}
 
 		paths[resDir] = targetPath

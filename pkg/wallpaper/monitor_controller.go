@@ -45,6 +45,14 @@ const (
 	CmdAnchorBR   Command = 209
 )
 
+// displayTracker is the optional store surface that keeps on-screen images safe from
+// cache maintenance (implemented by *ImageStore; test doubles may omit it).
+type displayTracker interface {
+	ReserveDisplay(monitorID int, id string)
+	CommitDisplay(monitorID int, id string)
+	CancelDisplay(monitorID int, id string)
+}
+
 // StoreInterface defines the subset of ImageStore methods needed by the controller.
 type StoreInterface interface {
 	Count() int
@@ -509,8 +517,18 @@ func (mc *MonitorController) applyImage(img provider.Image) {
 		return
 	}
 
+	// Reserve the image in the store before publishing it, so cache maintenance cannot
+	// delete its files during the switch (lock order: mc.mu -> store.mu; no Fyne here).
+	dt, _ := mc.Store.(displayTracker)
+	if dt != nil {
+		dt.ReserveDisplay(mc.ID, img.ID)
+	}
+
 	// Check if file physically exists before calling OS to avoid generic errors
 	if _, err := mc.os.Stat(path); os.IsNotExist(err) {
+		if dt != nil {
+			dt.CancelDisplay(mc.ID, img.ID)
+		}
 		log.Printf("[Monitor %d] ERROR: Wallpaper file missing: %s. Metadata is stale. Requesting refetch...", mc.ID, path)
 		// Clear local metadata that is proven stale so it's not chosen again
 		mc.Store.ClearDerivatives(img.ID)
@@ -525,7 +543,11 @@ func (mc *MonitorController) applyImage(img provider.Image) {
 
 	log.Printf("[Monitor %d] Setting wallpaper: %s", mc.ID, path)
 	if err := mc.os.SetWallpaper(path, mc.ID); err != nil {
+		// Keep both the previous image and the reservation protected: we cannot tell
+		// which one the OS is showing. The next switch drops the stale reservation.
 		log.Printf("[ERROR] [Monitor %d] Failed to set wallpaper: %v", mc.ID, err)
+	} else if dt != nil {
+		dt.CommitDisplay(mc.ID, img.ID) // releases the previously shown image
 	}
 	mc.Store.MarkSeen(path)
 

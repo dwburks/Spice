@@ -100,6 +100,7 @@ func (d *Dispatcher) pump(pr provider.ImageProvider, inChan <-chan DownloadJob) 
 		case job := <-inChan:
 			// Ensure context is still alive
 			if job.Ctx != nil && job.Ctx.Err() != nil {
+				job.finish()
 				continue
 			}
 
@@ -115,6 +116,7 @@ func (d *Dispatcher) pump(pr provider.ImageProvider, inChan <-chan DownloadJob) 
 
 			// Ensure context wasn't cancelled during the first wait
 			if job.Ctx != nil && job.Ctx.Err() != nil {
+				job.finish()
 				continue
 			}
 

@@ -112,6 +112,11 @@ func (wp *Plugin) FetchNewImages(force bool, providerID ...string) {
 
 			wg.Wait()
 
+			// New downloads grow the cache: evict retained masters back under budget.
+			if totalQueued.Value() > 0 {
+				wp.scheduleCacheMaintenance(false)
+			}
+
 			// Batch Reshuffle Optimization (User Approach):
 			// Signal monitors to update their shuffle lists only after the entire batch is processed.
 			if totalQueued.Value() > 0 && (wp.interrupt == nil || !wp.interrupt.Value()) {
@@ -149,7 +154,7 @@ func (wp *Plugin) RefreshImagesAndPulse() {
 		wp.CancelFetchContext()
 
 		// Robust Sync: Reconcile store and invalidate stale derivatives
-		wp.syncStoreWithConfig()
+		wp.resyncStore()
 
 		// Ensure tray menu is rebuilt (e.g. if Favorites was toggled)
 		if wp.manager != nil {
@@ -257,7 +262,13 @@ func (wp *Plugin) fetchFromProvider(fetchCtx context.Context, q ImageQuery, p pr
 		// Pattern: Deduplication (At-the-Gate)
 		// Deadlock Break: We only skip an image if it exists AND already has derivatives for your current monitors.
 		// This allow "Backlog Healing": if you have 1000 images but 0 derivatives, this allows them back into the pipeline.
-		if existing, exists := wp.store.GetByID(img.ID); exists {
+		job := DownloadJob{
+			Ctx:      queryCtx,
+			Image:    img,
+			Provider: p,
+		}
+		existing, inStore := wp.store.GetByID(img.ID)
+		if inStore {
 			if wp.allMonitorDerivativesExist(existing) {
 				log.Debugf("Skipping image already in store with all derivatives: %s", img.ID)
 				continue
@@ -265,11 +276,22 @@ func (wp *Plugin) fetchFromProvider(fetchCtx context.Context, q ImageQuery, p pr
 			log.Debugf("Image %s exists but is missing derivatives. Allowing re-processing for backlog healing.", img.ID)
 			// Merge existing metadata (like already probed dimensions) into the fetch-result image
 			img.MergeExistingMetadata(existing)
+			job.Image = img
+		} else if rs, ok := wp.store.(retainedStore); ok {
+			if e, retained := rs.GetRetained(img.ID); retained {
+				if _, onDisk := wp.masterOnDisk(img.ID, e.Ext); onDisk {
+					// Retained master on disk: re-admit locally. No provider on the job, so it
+					// bypasses the API/download pacing lanes (no network work to pace).
+					log.Debugf("Image %s is retained on disk. Re-admitting without download.", img.ID)
+					job.Provider = nil
+					job.ReuseOnly = true
+				}
+			}
 		}
-		job := DownloadJob{
-			Ctx:      queryCtx,
-			Image:    img,
-			Provider: p,
+		if !job.ReuseOnly && !inStore && wp.knownOversized(img) {
+			// Not an error: skipping keeps the page counted as productive (no page wrap).
+			log.Debugf("Skipping image %s: exceeds max download size (%d bytes).", img.ID, img.FileSize)
+			continue
 		}
 		// Submit blocking (until buffer clears or fetchCtx aborts)
 		if submitter.Submit(fetchCtx, job) {

@@ -1,6 +1,7 @@
 package wallpaper
 
 import (
+	"errors"
 	"fmt"
 	"image"
 	_ "image/jpeg"
@@ -22,6 +23,13 @@ type FileManager struct {
 	rootDir string
 	wg      sync.WaitGroup
 	closing atomic.Bool
+
+	// removeFn overrides os.Remove in removePaths (tests simulate a locked file
+	// without depending on any one OS's open-file delete semantics).
+	removeFn func(string) error
+	// scanHook, if set, runs at the end of ScanMasters (tests model files appearing
+	// between a scan and the lock that consumes it).
+	scanHook func()
 }
 
 // NewFileManager creates a new FileManager with the given root directory.
@@ -72,11 +80,272 @@ func (fm *FileManager) EnsureDirs() error {
 }
 
 // validateID ensures the ID does not contain path traversal characters.
+// Both separators are rejected on every OS: Windows treats '/' as a separator too, and
+// an ID that is only valid on one platform would make the cache non-portable.
 func (fm *FileManager) validateID(id string) error {
-	if strings.Contains(id, "..") || strings.Contains(id, string(filepath.Separator)) {
+	if strings.Contains(id, "..") || strings.ContainsAny(id, `/\`) || strings.ContainsRune(id, 0) {
 		return fmt.Errorf("invalid id: contains illegal characters")
 	}
 	return nil
+}
+
+// tempDownloadSuffix marks an in-progress master download. Downloads are written to
+// "<id><ext>"+tempDownloadSuffix in the same directory and renamed into place only on success.
+const tempDownloadSuffix = ".spice_dl"
+
+// staleTempDownloadAge is how old an abandoned temp download must be before orphan cleanup removes it.
+// Younger files may belong to a download that is still in flight.
+const staleTempDownloadAge = time.Hour
+
+// isImageExt reports whether ext (with dot, any case) is a cached image extension.
+func isImageExt(ext string) bool {
+	switch strings.ToLower(ext) {
+	case ".jpg", ".jpeg", ".png":
+		return true
+	}
+	return false
+}
+
+// isMasterCandidate reports whether a root-directory file name can be a master. Masters
+// take their extension from the download URL (usually .jpg/.jpeg/.png, but not always),
+// so everything except Spice's own bookkeeping files qualifies.
+func isMasterCandidate(name string) bool {
+	lower := strings.ToLower(name)
+	switch {
+	case strings.HasSuffix(lower, ".json"), strings.HasSuffix(lower, ".tmp"),
+		strings.HasSuffix(lower, tempDownloadSuffix), strings.HasPrefix(name, "."):
+		return false
+	}
+	return filepath.Ext(name) != ""
+}
+
+// findMaster locates id's master on disk, trying preferredExt first and then the usual
+// image extensions (lowercase; see NormalizeExtensions). Returns the extension as found.
+func (fm *FileManager) findMaster(id, preferredExt string) (string, int64, bool) {
+	seen := map[string]bool{}
+	for _, ext := range []string{preferredExt, strings.ToLower(preferredExt), ".jpg", ".jpeg", ".png"} {
+		if ext == "" || seen[ext] {
+			continue
+		}
+		seen[ext] = true
+		path, err := fm.GetMasterPath(id, ext)
+		if err != nil {
+			continue
+		}
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return ext, info.Size(), true
+		}
+	}
+	return "", 0, false
+}
+
+// NormalizeExtensions renames cached masters and derivatives whose image extension is
+// not lowercase (e.g. "<id>.JPG" from a ".JPG" URL) to the lowercase form, so the same
+// lookup works on case-sensitive (Linux) and case-insensitive (Windows/macOS) filesystems.
+// If a lowercase file already exists as a different file, the uppercase duplicate is
+// removed. Returns old path -> new path for every file that changed name.
+func (fm *FileManager) NormalizeExtensions() map[string]string {
+	renamed := make(map[string]string)
+	normalize := func(path string) {
+		name := filepath.Base(path)
+		trimmed := strings.TrimSuffix(name, ".spice_tmp")
+		ext := filepath.Ext(trimmed)
+		lower := strings.ToLower(ext)
+		if ext == lower || !isImageExt(lower) || trimmed != name {
+			return
+		}
+		target := filepath.Join(filepath.Dir(path), strings.TrimSuffix(name, ext)+lower)
+		srcInfo, err := os.Stat(path)
+		if err != nil {
+			return
+		}
+		if dstInfo, err := os.Stat(target); err == nil && !os.SameFile(srcInfo, dstInfo) {
+			// Case-sensitive filesystem with both spellings: keep the lowercase file.
+			if err := os.Remove(path); err == nil {
+				renamed[path] = target
+			}
+			return
+		}
+		// Same file (case-insensitive filesystem) or no lowercase file yet: case-only
+		// renames are supported by os.Rename on Windows, macOS and Linux.
+		if err := os.Rename(path, target); err != nil {
+			log.Printf("FileManager: Failed to normalize extension of %s: %v", path, err)
+			return
+		}
+		renamed[path] = target
+	}
+
+	if entries, err := os.ReadDir(fm.rootDir); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				normalize(filepath.Join(fm.rootDir, e.Name()))
+			}
+		}
+	}
+	_ = filepath.Walk(filepath.Join(fm.rootDir, FittedRootDir), func(path string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			normalize(path)
+		}
+		return nil
+	})
+	if len(renamed) > 0 {
+		log.Printf("FileManager: Normalized %d cached file extensions to lowercase.", len(renamed))
+	}
+	return renamed
+}
+
+// MasterFileInfo describes a master file found on disk.
+type MasterFileInfo struct {
+	Ext  string // Extension as it appears on disk (e.g. ".jpg")
+	Size int64  // Logical file size in bytes (os.FileInfo.Size, not block usage)
+}
+
+// ScanMasters lists the master files in the root directory, keyed by image ID.
+// Sizes come from the directory listing (logical size), never from disk block usage.
+func (fm *FileManager) ScanMasters() (map[string]MasterFileInfo, error) {
+	entries, err := os.ReadDir(fm.rootDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return map[string]MasterFileInfo{}, nil
+		}
+		return nil, err
+	}
+	masters := make(map[string]MasterFileInfo, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !isMasterCandidate(name) {
+			continue
+		}
+		ext := filepath.Ext(name)
+		info, err := e.Info()
+		if err != nil {
+			continue // Vanished between ReadDir and Info
+		}
+		masters[strings.TrimSuffix(name, ext)] = MasterFileInfo{Ext: ext, Size: info.Size()}
+	}
+	if fm.scanHook != nil {
+		fm.scanHook()
+	}
+	return masters, nil
+}
+
+// orphanDeletePacing spaces out orphan deletions to keep disk I/O gentle.
+const orphanDeletePacing = 50 * time.Millisecond
+
+// IDFiles lists the files on disk that belong to one image ID.
+type IDFiles struct {
+	Masters     []string // Root-directory files named <id><ext>
+	Derivatives []string // Fitted files named <id><ext> (or <id><ext>.spice_tmp)
+}
+
+// ListFilesByID indexes the cache tree by image ID in one pass (one ReadDir of the root,
+// one walk of the fitted tree). If want is non-nil, only IDs for which it returns true
+// are included.
+func (fm *FileManager) ListFilesByID(want func(id string) bool) map[string]*IDFiles {
+	out := make(map[string]*IDFiles)
+	get := func(id string) *IDFiles {
+		f := out[id]
+		if f == nil {
+			f = &IDFiles{}
+			out[id] = f
+		}
+		return f
+	}
+
+	if entries, err := os.ReadDir(fm.rootDir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() || !isMasterCandidate(e.Name()) {
+				continue
+			}
+			name := e.Name()
+			id := strings.TrimSuffix(name, filepath.Ext(name))
+			if want == nil || want(id) {
+				f := get(id)
+				f.Masters = append(f.Masters, filepath.Join(fm.rootDir, name))
+			}
+		}
+	}
+
+	fittedRoot := filepath.Join(fm.rootDir, FittedRootDir)
+	_ = filepath.Walk(fittedRoot, func(path string, info os.FileInfo, err error) error {
+		if fm.closing.Load() {
+			return filepath.SkipAll
+		}
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		trimmed := strings.TrimSuffix(info.Name(), ".spice_tmp")
+		ext := filepath.Ext(trimmed)
+		if !isImageExt(ext) {
+			return nil
+		}
+		id := strings.TrimSuffix(trimmed, ext)
+		if want == nil || want(id) {
+			f := get(id)
+			f.Derivatives = append(f.Derivatives, path)
+		}
+		return nil
+	})
+	return out
+}
+
+// removePaths deletes the given files, sleeping pace between removals. Files that are
+// already gone are not failures; any other failure (e.g. a file held open on Windows) is
+// returned so the caller keeps its bookkeeping and retries later.
+func (fm *FileManager) removePaths(paths []string, pace time.Duration) error {
+	removeFile := os.Remove
+	if fm.removeFn != nil {
+		removeFile = fm.removeFn
+	}
+	var errs error
+	for _, p := range paths {
+		if fm.closing.Load() {
+			return errors.Join(errs, errors.New("aborted by shutdown"))
+		}
+		if pace > 0 {
+			time.Sleep(pace)
+		}
+		if err := removeFile(p); err != nil && !os.IsNotExist(err) {
+			errs = errors.Join(errs, err)
+		}
+	}
+	return errs
+}
+
+// sweepStaleTempDownloads removes abandoned partial downloads (crash or kill mid-transfer).
+// Younger temp files may belong to a download still in flight and are left alone.
+func (fm *FileManager) sweepStaleTempDownloads() int {
+	removed := 0
+	entries, err := os.ReadDir(fm.rootDir)
+	if err != nil {
+		return 0
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), tempDownloadSuffix) {
+			continue
+		}
+		if info, err := e.Info(); err == nil && time.Since(info.ModTime()) > staleTempDownloadAge {
+			if err := os.Remove(filepath.Join(fm.rootDir, e.Name())); err == nil {
+				removed++
+			}
+		}
+	}
+	return removed
+}
+
+// runAsync runs fn in a tracked background goroutine so Close can drain it.
+func (fm *FileManager) runAsync(fn func()) {
+	if fm.closing.Load() {
+		return
+	}
+	fm.wg.Add(1)
+	go func() {
+		defer fm.wg.Done()
+		fn()
+	}()
 }
 
 // GetMasterPath returns the absolute path for the Master (Raw) image.
@@ -200,10 +469,29 @@ func (fm *FileManager) DeepDelete(id string) error {
 }
 
 // CleanupOrphans removes files from the root directory and subdirectories
-// that are NOT present in the knownIDs map.
+// that are NOT present in the knownIDs map. It also removes abandoned temp downloads.
+// The knownIDs map is a snapshot; prefer ImageStore.CleanupOrphanFiles, which re-checks
+// ownership at delete time. This variant remains for stores without that support.
+//
+// IDs are matched case-insensitively as well as exactly, so the outcome is the same on
+// case-insensitive (Windows/macOS defaults) and case-sensitive (Linux) filesystems: a file
+// whose name differs from a known ID only by case is kept rather than deleted, because on
+// a case-insensitive filesystem it IS that known image's file.
 func (fm *FileManager) CleanupOrphans(knownIDs map[string]bool) {
 	log.Print("FileManager: Starting orphan cleanup...")
 	deletedCount := 0
+
+	knownFold := make(map[string]bool, len(knownIDs))
+	for id, ok := range knownIDs {
+		if ok {
+			knownFold[strings.ToLower(id)] = true
+		}
+	}
+	isKnown := func(id string) bool {
+		return knownIDs[id] || knownFold[strings.ToLower(id)]
+	}
+
+	deletedCount += fm.sweepStaleTempDownloads()
 
 	// 1. Clean Root (Masters)
 	entries, err := os.ReadDir(fm.rootDir)
@@ -218,15 +506,13 @@ func (fm *FileManager) CleanupOrphans(knownIDs map[string]bool) {
 			}
 			name := entry.Name()
 			ext := filepath.Ext(name)
-			lowerExt := strings.ToLower(ext)
-
-			if lowerExt != ".jpg" && lowerExt != ".jpeg" && lowerExt != ".png" {
+			if !isImageExt(ext) {
 				continue
 			}
 
 			id := strings.TrimSuffix(name, ext)
 
-			if !knownIDs[id] {
+			if !isKnown(id) {
 				fullPath := filepath.Join(fm.rootDir, name)
 				time.Sleep(50 * time.Millisecond) // Pacer
 				if err := os.Remove(fullPath); err == nil {
@@ -249,15 +535,13 @@ func (fm *FileManager) CleanupOrphans(knownIDs map[string]bool) {
 			name := info.Name()
 			trimmed := strings.TrimSuffix(name, ".spice_tmp")
 			ext := filepath.Ext(trimmed)
-			lowerExt := strings.ToLower(ext)
-
-			if lowerExt != ".jpg" && lowerExt != ".jpeg" && lowerExt != ".png" {
+			if !isImageExt(ext) {
 				return nil
 			}
 
 			id := strings.TrimSuffix(trimmed, ext)
 
-			if !knownIDs[id] {
+			if !isKnown(id) {
 				// Orphan
 				time.Sleep(50 * time.Millisecond) // Pacer
 				if err := os.Remove(path); err == nil {

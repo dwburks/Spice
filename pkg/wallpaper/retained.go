@@ -605,3 +605,31 @@ func (s *ImageStore) RetainActive(img provider.Image) bool {
 	s.refreshRetainedSizes(ids)
 	return true
 }
+
+// RetagQueryIDs re-links images (in rotation and retained) whose SourceQueryID was renamed
+// (old -> new), e.g. by the query-ID migration. Returns how many were re-tagged.
+func (s *ImageStore) RetagQueryIDs(remap map[string]string) int {
+	if len(remap) == 0 {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for i := range s.images {
+		if newID, ok := remap[s.images[i].SourceQueryID]; ok && s.images[i].SourceQueryID != "" {
+			s.images[i].SourceQueryID = newID
+			n++
+		}
+	}
+	for id, e := range s.retained {
+		if newID, ok := remap[e.Image.SourceQueryID]; ok && e.Image.SourceQueryID != "" {
+			e.Image.SourceQueryID = newID
+			s.retained[id] = e
+			n++
+		}
+	}
+	if n > 0 {
+		s.scheduleSaveLocked()
+	}
+	return n
+}

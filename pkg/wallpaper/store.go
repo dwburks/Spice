@@ -241,8 +241,10 @@ func (s *ImageStore) SetDerivativePath(id string, resKey string, path string) bo
 	return false
 }
 
-// ClearDerivatives resets an image's DerivativePaths and ProcessingFlags.
-// Used by monitor_controller when a derivative file is missing from disk.
+// ClearDerivatives resets an image's DerivativePaths (and the per-derivative
+// "VirtualFramed:" tags). Used by monitor_controller when a derivative file is missing from
+// disk. The processing-settings flags and incompatibility tags are kept: they still describe
+// the image, and wiping them made the next Sync invalidate it as if settings had changed.
 func (s *ImageStore) ClearDerivatives(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -251,7 +253,14 @@ func (s *ImageStore) ClearDerivatives(id string) bool {
 			// Incremental bucket update: remove this image's entries
 			s.removeFromBucketsLocked(id, s.images[i].DerivativePaths)
 			s.images[i].DerivativePaths = make(map[string]string)
-			s.images[i].ProcessingFlags = make(map[string]bool)
+			// New map (copies handed out by GetByID may share the old one).
+			flags := make(map[string]bool, len(s.images[i].ProcessingFlags))
+			for k, v := range s.images[i].ProcessingFlags {
+				if !strings.HasPrefix(k, "VirtualFramed:") {
+					flags[k] = v
+				}
+			}
+			s.images[i].ProcessingFlags = flags
 			s.scheduleSaveLocked()
 			return true
 		}
@@ -1008,8 +1017,8 @@ func (s *ImageStore) flagsMatch(img provider.Image, target map[string]bool) bool
 	// Reverse check: ensure the image doesn't have processing-mode keys
 	// that aren't in target (guards against future flag additions).
 	for k, v := range img.ProcessingFlags {
-		if strings.HasPrefix(k, "incompatible:") {
-			continue // skip metadata tags
+		if strings.HasPrefix(k, "incompatible:") || strings.HasPrefix(k, "VirtualFramed:") {
+			continue // skip per-image metadata tags (not processing settings)
 		}
 		if target[k] != v {
 			return false

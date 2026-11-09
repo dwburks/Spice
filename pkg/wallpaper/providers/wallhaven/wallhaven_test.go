@@ -351,10 +351,12 @@ func TestProvider_CreateQueryPanel_EditConfig(t *testing.T) {
 
 	id, err := cfg.AddImageQuery("Edit me", "https://wallhaven.cc/api/v1/search?q=edit-before", false)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = cfg.RemoveImageQuery(id) })
+	t.Cleanup(func() { _ = cfg.RemoveImageQuery(id) }) // re-registered below after the re-key
 
-	// Valid user-facing URL is parsed to the API form and stored.
-	require.NoError(t, list.EditConfig.UpdateHandler(id, "Edited", "https://wallhaven.cc/search?q=edit-after"))
+	// Valid user-facing URL is parsed to the API form and stored; the URL edit re-keys the query.
+	id, err = list.EditConfig.UpdateHandler(id, "Edited", "https://wallhaven.cc/search?q=edit-after")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = cfg.RemoveImageQuery(id) })
 	q, ok := cfg.GetQuery(id)
 	require.True(t, ok)
 	assert.Equal(t, "Edited", q.Description)
@@ -364,12 +366,15 @@ func TestProvider_CreateQueryPanel_EditConfig(t *testing.T) {
 	disp := list.GetDisplayURL(schema.Query{ID: id, URL: q.URL})
 	require.NotNil(t, disp)
 	assert.Regexp(t, WallhavenURLRegexp, disp.String())
-	require.NoError(t, list.EditConfig.UpdateHandler(id, "Edited", disp.String()))
+	sameID, err := list.EditConfig.UpdateHandler(id, "Edited", disp.String())
+	require.NoError(t, err)
+	assert.Equal(t, id, sameID, "no URL change: the ID is kept")
 	q2, _ := cfg.GetQuery(id)
 	assert.Equal(t, q.URL, q2.URL)
 
 	// Invalid URL is rejected and nothing changes.
-	assert.Error(t, list.EditConfig.UpdateHandler(id, "Edited", "https://example.com/not-wallhaven"))
+	_, err = list.EditConfig.UpdateHandler(id, "Edited", "https://example.com/not-wallhaven")
+	assert.Error(t, err)
 	q3, _ := cfg.GetQuery(id)
 	assert.Equal(t, q.URL, q3.URL)
 }

@@ -313,8 +313,9 @@ type AddQueryConfig struct {
 	AddHandler func(desc, url string, active bool) (string, error)
 
 	// UpdateHandler performs an in-place edit of an existing query (used when the config is
-	// supplied as QueryListItem.EditConfig). It returns an error if the edit is rejected.
-	UpdateHandler func(id, desc, url string) error
+	// supplied as QueryListItem.EditConfig). It returns the query's ID after the edit (a URL
+	// change gives the query a new ID) or an error if the edit is rejected.
+	UpdateHandler func(id, desc, url string) (string, error)
 }
 
 // SecretItem represents a sensitive credential (like an API key).

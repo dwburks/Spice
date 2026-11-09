@@ -157,12 +157,18 @@ func UnifyQueriesStep(cfg *Config) (bool, error) {
 func BackfillUnifiedStep(cfg *Config) (bool, error) {
 	changed := false
 	for i, q := range cfg.Queries {
-		if q.ID == "" {
-			cfg.Queries[i].ID = GenerateQueryID(q.URL)
-			changed = true
-		}
 		if q.Provider == "" {
 			cfg.Queries[i].Provider = "Wallhaven"
+			changed = true
+		}
+		if q.ID == "" {
+			// Assign the final provider-scoped ID directly (Favorites keeps the legacy form,
+			// which PruneStaleFavoritesStep handles), so a fresh config needs no later rename.
+			if cfg.Queries[i].Provider == "Favorites" {
+				cfg.Queries[i].ID = GenerateQueryID(q.URL)
+			} else {
+				cfg.Queries[i].ID = queryIDFor(cfg.Queries[i].Provider, q.URL)
+			}
 			changed = true
 		}
 	}
@@ -216,9 +222,17 @@ func UpdateCollisionsStep(cfg *Config) (bool, error) {
 			continue
 		}
 		// Generate new ID using provider + URL
-		newID := GenerateQueryID(cfg.Queries[i].Provider + ":" + cfg.Queries[i].URL)
+		newID := queryIDFor(cfg.Queries[i].Provider, cfg.Queries[i].URL)
 		if cfg.Queries[i].ID != newID {
 			log.Printf("Migration: Updating query ID for %s: %s -> %s", cfg.Queries[i].Provider, cfg.Queries[i].ID, newID)
+			// Remember the rename so images tagged with the old ID can be re-tagged
+			// (Plugin.Activate applies it before the first Sync).
+			if cfg.queryIDRemap == nil {
+				cfg.queryIDRemap = make(map[string]string)
+			}
+			if cfg.Queries[i].ID != "" {
+				cfg.queryIDRemap[cfg.Queries[i].ID] = newID
+			}
 			cfg.Queries[i].ID = newID
 			changed = true
 		}

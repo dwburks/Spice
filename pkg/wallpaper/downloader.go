@@ -48,7 +48,7 @@ func (wp *Plugin) ProcessImageJob(ctx context.Context, job DownloadJob) (resultI
 		log.Debugf("Reusing cached master for %s (no download).", img.ID)
 		// A cached copy whose enrichment soft-failed gets one more try when a provider is
 		// available (a ReuseOnly re-admission has none and stays network-free).
-		if !img.Enriched && downloadProvider != nil {
+		if !img.Enriched && downloadProvider != nil && !job.ReuseOnly {
 			img = wp.enrichImage(ctx, img, downloadProvider)
 		}
 	} else if job.ReuseOnly {
@@ -142,20 +142,9 @@ func (wp *Plugin) ProcessImageJob(ctx context.Context, job DownloadJob) (resultI
 	}
 
 	// 3. Ensure Derivative (Processed Image)
-	mode := wp.cfg.GetSmartFitMode()
-	isFlex := mode == SmartFitAggressive
-	isQuality := mode == SmartFitNormal
-
-	if img.ProcessingFlags == nil {
-		img.ProcessingFlags = make(map[string]bool)
-	}
-
-	// Update flags with current session settings
-	img.ProcessingFlags["SmartFit"] = wp.cfg.GetSmartFit()
-	img.ProcessingFlags["FitFlexibility"] = isFlex
-	img.ProcessingFlags["FitQuality"] = isQuality
-	img.ProcessingFlags["FaceCrop"] = wp.cfg.GetFaceCropEnabled()
-	img.ProcessingFlags["FaceBoost"] = wp.cfg.GetFaceBoostEnabled()
+	// Record the full set of current processing settings: the same map Sync compares
+	// against, so the next Sync does not invalidate a freshly processed image.
+	wp.stampProcessingFlags(&img)
 
 	derivativePaths, err := wp.ensureDerivativeTracked(ctx, img, masterPath, &created.derivatives)
 	if err != nil {

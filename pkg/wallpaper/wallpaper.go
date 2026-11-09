@@ -115,6 +115,11 @@ type Plugin struct {
 	// Image IDs whose download was aborted this session for exceeding the size cap
 	oversizedIDs sync.Map // string (imageID) -> bool
 
+	// Startup restore of dormant images (cache_restore.go). restorePaceMu is a leaf lock.
+	restorePaceMu          sync.Mutex
+	restoreFallbackLimiter *rate.Limiter
+	restorePace            time.Duration // 0 = defaultRestorePace (tests shorten it)
+
 	// Rate limiters for PacedProviders
 	apiLimiters     sync.Map // string (providerID) -> *rate.Limiter
 	processLimiters sync.Map // string (providerID) -> *rate.Limiter
@@ -434,6 +439,9 @@ func (wp *Plugin) Activate() {
 		log.Printf("Failed to load cache: %v", err)
 	}
 
+	// Before the first Sync: re-link cached images to query IDs renamed by this load.
+	wp.applyQueryIDRemap()
+
 	// Reconcile favorite flags against live data to prevent ghost favorites
 	wp.reconcileFavorites()
 
@@ -509,6 +517,10 @@ func (wp *Plugin) Activate() {
 	}
 	// Start Pipeline
 	wp.pipeline.Start(workers)
+
+	// Re-fit images that are in rotation but have no derivatives, from their cached
+	// masters (local only, paced). Runs after the first Sync and with monitors known.
+	go wp.restoreDormantImages(wp.ctx)
 
 	// Nightly scheduler now runs unconditionally to handle metadata syncs, updates, etc.
 	// Actual image downloading is gated within the scheduler by GetNightlyRefresh().
@@ -1415,17 +1427,41 @@ func (wp *Plugin) onQueryRemoved(queryID string) {
 	wp.downloadMutex.Unlock()
 }
 
-// onQueryURLChanged discards everything fetched for a query's previous URL and restarts it at page 1.
-func (wp *Plugin) onQueryURLChanged(queryID string) {
-	log.Debugf("Plugin: Query %s URL changed. Removing stale images from rotation (masters retained)...", queryID)
-	wp.CancelQueryContext(queryID)
-	wp.removeQueryFromRotation(queryID, true)
+// applyQueryIDRemap re-tags cached images whose query ID was renamed by this load's
+// migration (UpdateCollisionsStep), so the first Sync keeps them in rotation instead of
+// retaining them as belonging to an unknown query.
+func (wp *Plugin) applyQueryIDRemap() int {
+	remap := wp.cfg.QueryIDRemap()
+	if len(remap) == 0 {
+		return 0
+	}
+	rs, ok := wp.store.(interface{ RetagQueryIDs(map[string]string) int })
+	if !ok {
+		return 0
+	}
+	n := rs.RetagQueryIDs(remap)
+	if n > 0 {
+		log.Printf("Re-tagged %d cached images to renamed query IDs.", n)
+	}
+	return n
+}
+
+// onQueryURLChanged discards everything fetched for a query's previous URL (old ID) and
+// starts the new search (new ID) at page 1: the old ID's images leave rotation into detached
+// retention, its in-flight work is cancelled, and its page counter is dropped. The new ID
+// gets no page entry, so it starts at page 1 (a new search; the old position is meaningless).
+func (wp *Plugin) onQueryURLChanged(oldID, newID string) {
+	log.Debugf("Plugin: Query %s URL changed (now %s). Removing stale images from rotation (masters retained)...", oldID, newID)
+	wp.CancelQueryContext(oldID)
+	wp.removeQueryFromRotation(oldID, true)
 	wp.downloadMutex.Lock()
-	delete(wp.queryPages, queryID)
+	delete(wp.queryPages, oldID)
+	delete(wp.queryPages, newID)
 	wp.downloadMutex.Unlock()
+	wp.saveQueryPages()
 
 	// Inactive queries are not fetched; they will start fresh when re-enabled.
-	if q, ok := wp.cfg.GetQuery(queryID); ok && q.Active {
+	if q, ok := wp.cfg.GetQuery(newID); ok && q.Active {
 		// Abort blocked fetch loops tied to the old URL, then replenish from the new one.
 		wp.CancelFetchContext()
 		go wp.RequestFetch()
@@ -1467,8 +1503,15 @@ func (wp *Plugin) ResetFavorites() {
 // syncStoreWithConfig reconciles the image store with the current configuration.
 // It handles query activation, cache sizing, and derivative invalidation for processing modes.
 func (wp *Plugin) syncStoreWithConfig() {
+	wp.store.Sync(int(wp.cfg.GetCacheSize().Size()), wp.processingFlags(), wp.cfg.GetActiveQueryIDs())
+}
+
+// processingFlags is the single source of truth for the settings a derivative depends on.
+// ProcessImageJob stamps exactly this set on every processed image (stampProcessingFlags)
+// and Sync compares against it, so a fresh image always matches until a setting changes.
+func (wp *Plugin) processingFlags() map[string]bool {
 	mode := wp.cfg.GetSmartFitMode()
-	targetFlags := map[string]bool{
+	return map[string]bool{
 		"SmartFit":       wp.cfg.GetSmartFit(),
 		"FitFlexibility": mode == SmartFitAggressive,
 		"FitQuality":     mode == SmartFitNormal,
@@ -1479,8 +1522,23 @@ func (wp *Plugin) syncStoreWithConfig() {
 		"Matting":        wp.cfg.VirtualPaperMatting,
 		fmt.Sprintf("FrameSize_%.2f", wp.cfg.VirtualFrameSize): true,
 	}
+}
 
-	wp.store.Sync(int(wp.cfg.GetCacheSize().Size()), targetFlags, wp.cfg.GetActiveQueryIDs())
+// stampProcessingFlags records the current processing settings on img: any frame-size key
+// left by an earlier setting is dropped, then every key of processingFlags() is set.
+// Image-specific tags ("incompatible:", "VirtualFramed:") are kept.
+func (wp *Plugin) stampProcessingFlags(img *provider.Image) {
+	if img.ProcessingFlags == nil {
+		img.ProcessingFlags = make(map[string]bool)
+	}
+	for k := range img.ProcessingFlags {
+		if strings.HasPrefix(k, "FrameSize_") {
+			delete(img.ProcessingFlags, k)
+		}
+	}
+	for k, v := range wp.processingFlags() {
+		img.ProcessingFlags[k] = v
+	}
 }
 
 func (wp *Plugin) GetProviderTitle(providerID string) string {

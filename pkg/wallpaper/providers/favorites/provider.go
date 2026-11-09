@@ -618,7 +618,7 @@ func (p *Provider) FetchImages(ctx context.Context, apiURL string, page int) ([]
 // CreateSettingsPanel returns the declarative UI for favorites management.
 func (p *Provider) CreateSettingsPanel(_ setting.SettingsManager) *schema.PanelSchema {
 	return &schema.PanelSchema{
-		Description: i18n.T("Local favorites are stored persistently in your Spice application folder."),
+		Description: i18n.T("Favorites are saved in your Spice folder."),
 	}
 }
 
@@ -627,7 +627,7 @@ func (p *Provider) CreateQueryPanel(sm setting.SettingsManager, _ string) *schem
 	return &schema.PanelSchema{
 		Sections: []schema.SectionSchema{
 			{
-				Title: i18n.T("Manage Favorites"),
+				Title: i18n.T("Favorites"),
 				Items: []schema.ItemSchema{
 					schema.QueryListItem{
 						GetQueries: func() []schema.Query {

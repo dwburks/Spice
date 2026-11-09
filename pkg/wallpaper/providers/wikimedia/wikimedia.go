@@ -227,7 +227,7 @@ func (p *Provider) handleHttpInput(input string) (string, error) {
 		}
 	}
 
-	return "", errors.New(i18n.T("only 'Category:', 'File:' or component Search URLs are currently supported directly"))
+	return "", errors.New(i18n.T("Only Category:, File: or search URLs are supported."))
 }
 
 type wikimediaResponse struct {
@@ -518,7 +518,7 @@ func (p *Provider) GetDownloadHeaders() map[string]string {
 // CreateSettingsPanel returns the declarative UI for Wikimedia settings.
 func (p *Provider) CreateSettingsPanel(_ setting.SettingsManager) *schema.PanelSchema {
 	return &schema.PanelSchema{
-		Description: i18n.T("Wikimedia Commons is a media file repository making public domain and freely-licensed educational media content available to everyone."),
+		Description: i18n.T("Public-domain and freely licensed media from Wikimedia Commons."),
 		Sections: []schema.SectionSchema{
 			{
 				Compact: true,
@@ -536,11 +536,11 @@ func (p *Provider) CreateSettingsPanel(_ setting.SettingsManager) *schema.PanelS
 // CreateQueryPanel creates the image query management panel.
 func (p *Provider) CreateQueryPanel(sm setting.SettingsManager, pendingUrl string) *schema.PanelSchema {
 	addCfg := schema.AddQueryConfig{
-		Title:           i18n.T("Add Wikimedia Collection"),
+		Title:           i18n.T("Add Wikimedia collection"),
 		URLPlaceholder:  "Category:Nature or Search:Pacific Ocean",
 		URLValidator:    `^.*$`, // Wikimedia is flexible
-		URLErrorMsg:     i18n.T("Invalid Wikimedia Input"),
-		DescPlaceholder: i18n.T("Collection Description (e.g. Nature)"),
+		URLErrorMsg:     i18n.T("Enter a Wikimedia category, file, or search."),
+		DescPlaceholder: i18n.T("Description, e.g. Nature"),
 		AddHandler: func(desc, url string, active bool) (string, error) {
 			apiURL, err := p.ParseURL(url)
 			if err != nil {
@@ -557,7 +557,7 @@ func (p *Provider) CreateQueryPanel(sm setting.SettingsManager, pendingUrl strin
 	return &schema.PanelSchema{
 		Sections: []schema.SectionSchema{
 			{
-				Title:   i18n.T("Wikimedia Queries"),
+				Title:   i18n.T("Collections"),
 				Compact: true,
 				Items: []schema.ItemSchema{
 					schema.QueryListItem{
@@ -586,7 +586,7 @@ func (p *Provider) CreateQueryPanel(sm setting.SettingsManager, pendingUrl strin
 					},
 					schema.ButtonItem{
 						Name:       "wikimedia_add",
-						ButtonText: i18n.T("Add New Collection"),
+						ButtonText: i18n.T("Add collection"),
 						IconName:   "add",
 						OnPressed: func() {
 							sm.ShowAddQueryDialog(addCfg, "", "", sm.RefreshUI)

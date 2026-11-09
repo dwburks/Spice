@@ -12,6 +12,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/widget"
 	"github.com/stretchr/testify/require"
 	"github.com/zalando/go-keyring"
 
@@ -92,6 +93,9 @@ func TestRenderPrefsScreenshots(t *testing.T) {
 		sm.allWidgets["staggerChanges"].(*Switch).Toggle()
 		sm.allWidgets["nightlyRefresh"].(*Switch).Toggle()
 		sm.allWidgets["faceCrop"].(*Switch).Toggle()
+	})
+	render("frequency_custom_light", theme.VariantLight, schema.NavPageWallpaper, func(v *prefsNavView, sm *SettingsManager) {
+		sm.allWidgets["changeFrequency__preset"].(*widget.Select).SetSelected("Custom…")
 	})
 	render("app_light", theme.VariantLight, schema.NavPageApp, nil)
 	render("pause_dark", theme.VariantDark, schema.NavPagePause, nil)

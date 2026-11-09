@@ -299,9 +299,95 @@ func (sm *SettingsManager) renderTextRow(v schema.TextItem) fyne.CanvasObject {
 	if v.IsNumeric {
 		width = numericFieldWidth
 	}
+	if len(v.Presets) > 0 {
+		return sm.renderPresetTextRow(v, entry, status, width)
+	}
 	row := newInsetRow(v.Label, v.Help, status, fixedWidth(entry, width))
 	sm.trackRow(v.Name, row)
 	sm.manage(entry, row.Container, v.EnabledIf, v.VisibleIf)
+	return row.Container
+}
+
+// renderPresetTextRow renders a TextItem with Presets: a select of named values plus a Custom
+// option that reveals the entry. The entry stays the registered setting; picking a preset sets its
+// text, which stages the change through the entry's normal OnChanged path.
+func (sm *SettingsManager) renderPresetTextRow(v schema.TextItem, entry *widget.Entry, status *widget.Label, width float32) fyne.CanvasObject {
+	options := make([]string, 0, len(v.Presets)+1)
+	for _, p := range v.Presets {
+		options = append(options, p.Label)
+	}
+	customIdx := len(options)
+	options = append(options, v.CustomLabel)
+
+	presetIndex := func(val string) int {
+		for i, p := range v.Presets {
+			if p.Value == val {
+				return i
+			}
+		}
+		return -1
+	}
+
+	sel := widget.NewSelect(options, nil)
+	custom := []fyne.CanvasObject{fixedWidth(entry, width)}
+	if v.Suffix != "" {
+		suffix := widget.NewLabel(v.Suffix)
+		suffix.Importance = widget.LowImportance
+		custom = append(custom, suffix)
+	}
+	customBox := container.NewHBox(custom...)
+	control := container.NewHBox(customBox, fixedWidth(sel, selectMinWidth))
+
+	showCustom := func(show bool) {
+		if show == customBox.Visible() {
+			return
+		}
+		if show {
+			customBox.Show()
+		} else {
+			customBox.Hide()
+		}
+		control.Refresh()
+	}
+	// selectSilently mirrors a value in the select without re-entering its OnChanged.
+	selectSilently := func(val string) {
+		handler := sel.OnChanged
+		sel.OnChanged = nil
+		if i := presetIndex(val); i >= 0 {
+			sel.SetSelectedIndex(i)
+			showCustom(false)
+		} else {
+			sel.SetSelectedIndex(customIdx)
+			showCustom(true)
+		}
+		sel.OnChanged = handler
+	}
+	selectSilently(v.InitialValue)
+
+	sel.OnChanged = func(string) {
+		i := sel.SelectedIndex()
+		if i == customIdx || i < 0 {
+			showCustom(true)
+			return
+		}
+		showCustom(false)
+		entry.SetText(v.Presets[i].Value) // stages via the entry's OnChanged, like typing
+	}
+	// Programmatic SetValue / Revert on the entry keeps the select in step.
+	sm.afterSetHooks[v.Name] = func(val interface{}) {
+		if s, ok := val.(string); ok {
+			selectSilently(s)
+		}
+	}
+	sm.allWidgets[v.Name+"__preset"] = sel
+	sm.allWidgets[v.Name+"__custom"] = customBox
+
+	row := newInsetRow(v.Label, v.Help, status, control)
+	sm.trackRow(v.Name, row)
+	sm.manage(entry, row.Container, v.EnabledIf, v.VisibleIf)
+	if v.EnabledIf != nil {
+		sm.managedWidgets = append(sm.managedWidgets, managedWidget{widget: sel, enabledIf: v.EnabledIf})
+	}
 	return row.Container
 }
 
@@ -886,7 +972,7 @@ func (sm *SettingsManager) renderSecretRow(v schema.SecretItem) fyne.CanvasObjec
 	entry.Password = true
 	entry.SetPlaceHolder(v.Placeholder)
 
-	saveBtn := widget.NewButtonWithIcon(i18n.T("Verify & Save"), theme.ConfirmIcon(), nil)
+	saveBtn := widget.NewButtonWithIcon(i18n.T("Verify and save"), theme.ConfirmIcon(), nil)
 	saveBtn.Importance = widget.HighImportance
 	saveBtn.OnTapped = func() {
 		saveBtn.Disable()
@@ -906,7 +992,7 @@ func (sm *SettingsManager) renderSecretRow(v schema.SecretItem) fyne.CanvasObjec
 	display := widget.NewEntry()
 	display.SetText("********************************")
 	display.Disable()
-	clearBtn := widget.NewButtonWithIcon(i18n.T("Clear API Key"), theme.DeleteIcon(), func() {
+	clearBtn := widget.NewButtonWithIcon(i18n.T("Clear API key"), theme.DeleteIcon(), func() {
 		v.OnClear() // OnClear implementations call ResetSettings which already refreshes
 	})
 	clearBtn.Importance = widget.DangerImportance
@@ -937,7 +1023,7 @@ func (sm *SettingsManager) renderSecretRow(v schema.SecretItem) fyne.CanvasObjec
 
 // renderOAuthPickerRows renders the OAuth authorize/disconnect row plus the picker block.
 func (sm *SettingsManager) renderOAuthPickerRows(v schema.OAuthPickerItem) []fyne.CanvasObject {
-	statusLabel := widget.NewLabel(i18n.T("Status: Checking..."))
+	statusLabel := widget.NewLabel(i18n.T("Checking..."))
 	statusLabel.SizeName = theme.SizeNameCaptionText
 	var connectBtn *widget.Button
 	var safeFullRefresh func()
@@ -945,8 +1031,8 @@ func (sm *SettingsManager) renderOAuthPickerRows(v schema.OAuthPickerItem) []fyn
 	updateUI := func() {
 		isAuth, _ := v.CheckAuthStatus()
 		if isAuth {
-			statusLabel.SetText(i18n.T("Status: Authorized (Ready to Select)"))
-			connectBtn.SetText(i18n.T("Disconnect Authorisation"))
+			statusLabel.SetText(i18n.T("Authorized and ready to select photos"))
+			connectBtn.SetText(i18n.T("Disconnect"))
 			connectBtn.Importance = widget.DangerImportance
 			connectBtn.OnTapped = func() {
 				if err := v.OnDisconnect(); err != nil {
@@ -957,14 +1043,14 @@ func (sm *SettingsManager) renderOAuthPickerRows(v schema.OAuthPickerItem) []fyn
 				}
 			}
 		} else {
-			statusLabel.SetText(i18n.T("Status: Not Authorized"))
-			connectBtn.SetText(i18n.T("Authorize Application"))
+			statusLabel.SetText(i18n.T("Not authorized"))
+			connectBtn.SetText(i18n.T("Authorize"))
 			connectBtn.Importance = widget.MediumImportance
 			connectBtn.OnTapped = func() {
 				if err := v.OnAuthorize(); err != nil {
 					dialog.ShowError(err, sm.GetSettingsWindow())
 				} else {
-					dialog.ShowInformation(i18n.T("Success"), i18n.T("Authorized!"), sm.GetSettingsWindow())
+					dialog.ShowInformation(i18n.T("Success"), i18n.T("Spice is now authorized."), sm.GetSettingsWindow())
 					if safeFullRefresh != nil {
 						safeFullRefresh()
 					}
@@ -980,7 +1066,7 @@ func (sm *SettingsManager) renderOAuthPickerRows(v schema.OAuthPickerItem) []fyn
 	pickerStatus := widget.NewLabel("")
 	pickerStatus.SizeName = theme.SizeNameCaptionText
 
-	addBtn := widget.NewButton(i18n.T("Select Photos via Web Picker"), nil)
+	addBtn := widget.NewButton(i18n.T("Select photos in browser"), nil)
 	cancelBtn := widget.NewButton(i18n.T("Cancel"), nil)
 	cancelBtn.Importance = widget.LowImportance
 	cancelBtn.Hide()
@@ -993,7 +1079,7 @@ func (sm *SettingsManager) renderOAuthPickerRows(v schema.OAuthPickerItem) []fyn
 			pickerStatus.SetText("")
 		} else {
 			addBtn.Disable()
-			pickerStatus.SetText(i18n.T("Please Authorize above first."))
+			pickerStatus.SetText(i18n.T("Authorize Spice first."))
 		}
 	}
 	safeFullRefresh = func() {
@@ -1005,7 +1091,7 @@ func (sm *SettingsManager) renderOAuthPickerRows(v schema.OAuthPickerItem) []fyn
 	cancelBtn.OnTapped = func() {
 		if cancelFunc != nil {
 			cancelFunc()
-			pickerStatus.SetText(i18n.T("Operation cancelled."))
+			pickerStatus.SetText(i18n.T("Cancelled."))
 		}
 		cancelBtn.Hide()
 		progressBar.Hide()
@@ -1027,7 +1113,7 @@ func (sm *SettingsManager) renderOAuthPickerRows(v schema.OAuthPickerItem) []fyn
 		updateStatus := func(msg string) {
 			fyne.Do(func() { pickerStatus.SetText(msg) })
 		}
-		updateStatus(i18n.T("Creating Web Session..."))
+		updateStatus(i18n.T("Starting a browser session..."))
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancelFunc = cancel
@@ -1066,13 +1152,13 @@ func (sm *SettingsManager) renderOAuthPickerRows(v schema.OAuthPickerItem) []fyn
 				activeCheck.SetChecked(true)
 
 				form := container.NewVBox(
-					widget.NewLabel(i18n.T("Internal ID:")),
+					widget.NewLabel(i18n.T("Internal ID")),
 					urlEntry,
-					widget.NewLabel(i18n.T("Description:")),
+					widget.NewLabel(i18n.T("Description")),
 					descEntry,
 					activeCheck,
 				)
-				d := dialog.NewCustomConfirm(i18n.T("Save Collection"), i18n.T("Save"), i18n.T("Cancel"), form,
+				d := dialog.NewCustomConfirm(i18n.T("Save collection"), i18n.T("Save"), i18n.T("Cancel"), form,
 					func(save bool) {
 						if save {
 							if err := v.OnSaveCollection(guid, descEntry.Text, activeCheck.Checked); err != nil {
@@ -1248,13 +1334,13 @@ func (sm *SettingsManager) renderQueryList(v schema.QueryListItem) fyne.CanvasOb
 		}
 		rw.deleteButton.SetText(label)
 		rw.deleteButton.OnTapped = func() {
-			confirmTitle := i18n.T("Please Confirm")
-			confirmMsg := i18n.Tf("Are you sure you want to delete {{.Description}}?", map[string]any{"Description": query.Description})
+			confirmTitle := i18n.T("Confirm")
+			confirmMsg := i18n.Tf("Delete {{.Description}}?", map[string]any{"Description": query.Description})
 			if v.DeleteConfirmMessage != "" {
 				confirmMsg = v.DeleteConfirmMessage
 			} else if query.Managed || v.ForceActionEnabled {
 				if v.DeleteLabel == i18n.T("Clear") {
-					confirmMsg = i18n.T("Are you sure you want to delete all saved favorites?")
+					confirmMsg = i18n.T("Delete all saved favorites?")
 				}
 			}
 			sm.ShowConfirm(confirmTitle, confirmMsg, func(b bool) {

@@ -48,14 +48,26 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 			Items: []schema.ItemSchema{
 				schema.TextItem{
 					Name:         "changeFrequency",
-					Label:        i18n.T("Wallpaper Change Frequency (Minutes):"),
-					Help:         i18n.T("Set how often the wallpaper changes in minutes. Set to 0 for Never."),
+					Label:        i18n.T("Change frequency"),
+					Help:         i18n.T("How often each display gets a new wallpaper."),
 					InitialValue: fmt.Sprintf("%d", b.plugin.cfg.GetWallpaperChangeFrequency()),
 					IsNumeric:    true,
+					Presets: []schema.TextPreset{
+						{Label: i18n.T("Every 15 minutes"), Value: "15"},
+						{Label: i18n.T("Every 30 minutes"), Value: "30"},
+						{Label: i18n.T("Every hour"), Value: "60"},
+						{Label: i18n.T("Every 3 hours"), Value: "180"},
+						{Label: i18n.T("Every 6 hours"), Value: "360"},
+						{Label: i18n.T("Every 12 hours"), Value: "720"},
+						{Label: i18n.T("Daily"), Value: "1440"},
+						{Label: i18n.T("Never"), Value: "0"},
+					},
+					CustomLabel: i18n.T("Custom…"),
+					Suffix:      i18n.T("minutes"),
 					Validator: func(s string) error {
 						val, err := strconv.Atoi(s)
 						if err != nil || val < 0 {
-							return errors.New(i18n.T("Must be a positive integer or 0"))
+							return errors.New(i18n.T("Enter a whole number of minutes, or 0."))
 						}
 						return nil
 					},
@@ -65,57 +77,10 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 					},
 					NeedsRefresh: true,
 				},
-				schema.HorizontalRowItem{
-					ID: "freq_shortcuts",
-					Items: []schema.ItemSchema{
-						schema.ButtonItem{
-							Name:       "freqNever",
-							ButtonText: i18n.T("Never"),
-							OnPressed: func() {
-								b.sm.SetValue("changeFrequency", "0")
-							},
-						},
-						schema.ButtonItem{
-							Name:       "freq1h",
-							ButtonText: i18n.T("1 Hour"),
-							OnPressed: func() {
-								b.sm.SetValue("changeFrequency", "60")
-							},
-						},
-						schema.ButtonItem{
-							Name:       "freq3h",
-							ButtonText: i18n.T("3 Hours"),
-							OnPressed: func() {
-								b.sm.SetValue("changeFrequency", "180")
-							},
-						},
-						schema.ButtonItem{
-							Name:       "freq6h",
-							ButtonText: i18n.T("6 Hours"),
-							OnPressed: func() {
-								b.sm.SetValue("changeFrequency", "360")
-							},
-						},
-						schema.ButtonItem{
-							Name:       "freq12h",
-							ButtonText: i18n.T("12 Hours"),
-							OnPressed: func() {
-								b.sm.SetValue("changeFrequency", "720")
-							},
-						},
-						schema.ButtonItem{
-							Name:       "freqDaily",
-							ButtonText: i18n.T("Daily"),
-							OnPressed: func() {
-								b.sm.SetValue("changeFrequency", "1440")
-							},
-						},
-					},
-				},
 				schema.BoolItem{
 					Name:         "staggerChanges",
-					Label:        i18n.T("Stagger monitor changes:"),
-					Help:         i18n.T("Introduces a random delay when changing wallpapers across multiple screens to prevent a jarring simultaneous flash."),
+					Label:        i18n.T("Stagger display changes"),
+					Help:         i18n.T("Change displays a few seconds apart instead of all at once."),
 					InitialValue: b.plugin.cfg.GetStaggerMonitorChanges(),
 					ApplyFunc: func(val bool) {
 						b.plugin.cfg.SetStaggerMonitorChanges(val)
@@ -123,8 +88,8 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 				},
 				schema.BoolItem{
 					Name:         "chgImgOnStart",
-					Label:        i18n.T("Change wallpaper on start:"),
-					Help:         i18n.T("Disable if you prefer the wallpaper to change only based on its timer or a manual refresh."),
+					Label:        i18n.T("Change wallpaper at startup"),
+					Help:         i18n.T("Turn off to change wallpapers only on the timer or when you ask."),
 					InitialValue: b.plugin.cfg.GetChgImgOnStart(),
 					ApplyFunc: func(val bool) {
 						b.plugin.cfg.SetChgImgOnStart(val)
@@ -132,8 +97,8 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 				},
 				schema.BoolItem{
 					Name:         "nightlyRefresh",
-					Label:        i18n.T("Refresh wallpapers nightly:"),
-					Help:         i18n.T("Controls whether Spice automatically downloads new wallpapers each night. Background maintenance tasks (cache cleanup, metadata sync) always run regardless of this setting."),
+					Label:        i18n.T("Refresh wallpapers nightly"),
+					Help:         i18n.T("Download new wallpapers each night; cache cleanup runs either way."),
 					InitialValue: b.plugin.cfg.GetNightlyRefresh(),
 					ApplyFunc: func(val bool) {
 						b.plugin.cfg.SetNightlyRefresh(val)
@@ -147,8 +112,8 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 			Items: []schema.ItemSchema{
 				schema.SelectItem{
 					Name:         "cacheSize",
-					Label:        i18n.T("Cache Size:"),
-					Help:         i18n.T("Set how many images to cache for faster startup and less network usage. Set to \"None\" to disable caching."),
+					Label:        i18n.T("Cache size"),
+					Help:         i18n.T("How many images stay in rotation; more means more variety and more disk space."),
 					Options:      setting.StringOptions(GetCacheSizes()),
 					InitialValue: b.plugin.cfg.GetCacheSizeIndex(),
 					ApplyFunc: func(val interface{}) {
@@ -157,8 +122,8 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 				},
 				schema.SelectItem{
 					Name:         "maxDownloadSize",
-					Label:        i18n.T("Max Download Size:"),
-					Help:         i18n.T("Images larger than this are skipped and never downloaded, to save bandwidth and disk space."),
+					Label:        i18n.T("Max download size"),
+					Help:         i18n.T("Larger images are skipped to save bandwidth and disk space."),
 					Options:      MaxDownloadSizeOptionLabels(),
 					InitialValue: b.plugin.cfg.GetMaxDownloadSizeIndex(),
 					ApplyFunc: func(val interface{}) {
@@ -167,8 +132,8 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 				},
 				schema.SelectItem{
 					Name:         "cacheDiskSpace",
-					Label:        i18n.T("Cache Disk Space:"),
-					Help:         i18n.T("Disk space for downloaded originals. Images in rotation are always kept; images kept for reuse are removed oldest first when the cache grows past this size."),
+					Label:        i18n.T("Cache disk space"),
+					Help:         i18n.T("Images in rotation are always kept; older reusable images are removed first when the cache is full."),
 					Options:      CacheDiskBudgetOptionLabels(),
 					InitialValue: b.plugin.cfg.GetCacheDiskBudgetIndex(),
 					ApplyFunc: func(val interface{}) {
@@ -182,21 +147,21 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 				},
 				schema.ConfirmButtonItem{
 					Name:           "clearCache",
-					Label:          i18n.T("Clear Wallpaper Cache:"),
-					Help:           i18n.T("Delete all downloaded wallpapers (Source and Derivatives). This is a safety feature."),
-					ButtonText:     i18n.T("Clear Cache"),
-					ConfirmTitle:   i18n.T("Clear Cache?"),
-					ConfirmMessage: i18n.T("Are you sure? This will delete ALL downloaded images from disk. You will need internet to see new wallpapers."),
+					Label:          i18n.T("Clear wallpaper cache"),
+					Help:           i18n.T("Delete every downloaded wallpaper and its resized copies."),
+					ButtonText:     i18n.T("Clear cache"),
+					ConfirmTitle:   i18n.T("Clear wallpaper cache?"),
+					ConfirmMessage: i18n.T("All downloaded images will be deleted, and new wallpapers will need an internet connection."),
 					Importance:     schema.ImportanceDanger,
 					OnPressed:      b.plugin.ClearCache,
 				},
 				schema.ConfirmButtonItem{
 					Name:           "resetAvoidSet",
-					Label:          i18n.T("Blocked Images:"),
-					Help:           i18n.T("Clear the blocked images list. Blocked images may be downloaded next time wallpapers are refreshed."),
+					Label:          i18n.T("Blocked images"),
+					Help:           i18n.T("Clear the list so blocked images can download again on the next refresh."),
 					ButtonText:     i18n.T("Reset"),
-					ConfirmTitle:   i18n.T("Please Confirm"),
-					ConfirmMessage: i18n.T("This cannot be undone. Are you sure?"),
+					ConfirmTitle:   i18n.T("Reset blocked images?"),
+					ConfirmMessage: i18n.T("This can't be undone."),
 					Importance:     schema.ImportanceMedium,
 					OnPressed:      b.plugin.cfg.ResetAvoidSet,
 				},
@@ -208,8 +173,8 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 			Items: []schema.ItemSchema{
 				schema.SelectItem{
 					Name:         "smartFitMode",
-					Label:        i18n.T("Smart Fit Mode:"),
-					Help:         i18n.T("Control how images are fitted to your screen:\n- Disabled: Original image.\n- Quality: Rejects images with mismatched aspect ratio.\n- Flexibility: Allows high-res images to crop aggressively."),
+					Label:        i18n.T("Smart fit mode"),
+					Help:         i18n.T("Disabled keeps the original image, Quality skips images that don't match your screen's shape, and Flexibility lets high-resolution images crop more."),
 					Options:      GetSmartFitModes(),
 					InitialValue: int(b.plugin.cfg.GetSmartFitMode()),
 					ApplyFunc: func(val interface{}) {
@@ -226,8 +191,8 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 			Items: []schema.ItemSchema{
 				schema.BoolItem{
 					Name:         "faceCrop",
-					Label:        i18n.T("Enable Face Crop:"),
-					Help:         i18n.T("Aggressively crops the image to center on the largest face found. Good for portraits."),
+					Label:        i18n.T("Face crop"),
+					Help:         i18n.T("Crops tightly around the largest face, which suits portraits."),
 					InitialValue: b.plugin.cfg.GetFaceCropEnabled(),
 					NeedsRefresh: true,
 					EnabledIf: func() bool {
@@ -251,8 +216,8 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 				},
 				schema.BoolItem{
 					Name:         "faceBoost",
-					Label:        i18n.T("Enable Face Boost:"),
-					Help:         i18n.T("Uses face detection to hint the smart cropper. Keeps faces in frame but balances with other image details."),
+					Label:        i18n.T("Face boost"),
+					Help:         i18n.T("Keeps faces in frame while balancing the rest of the image."),
 					InitialValue: b.plugin.cfg.GetFaceBoostEnabled(),
 					NeedsRefresh: true,
 					EnabledIf: func() bool {
@@ -282,8 +247,8 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 			Items: []schema.ItemSchema{
 				schema.BoolItem{
 					Name:         "virtualFramingFallback",
-					Label:        i18n.T("Download & Frame Mismatched Images"),
-					Help:         i18n.T("Expand your wallpaper rotation by accepting images that do not naturally fit your screen and presenting them in a gallery frame instead of skipping them."),
+					Label:        i18n.T("Frame mismatched images"),
+					Help:         i18n.T("Show images that don't fit your screen in a gallery frame instead of skipping them."),
 					InitialValue: b.plugin.cfg.VirtualFramingFallback,
 					ApplyFunc: func(val bool) {
 						b.plugin.cfg.VirtualFramingFallback = val
@@ -298,9 +263,9 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 			Items: []schema.ItemSchema{
 				schema.SelectItem{
 					Name:         "virtualWallColor",
-					Label:        i18n.T("Virtual Wall Color:"),
-					Help:         i18n.T("Control the background wall behind the frame."),
-					Options:      []string{"Dynamic Algorithmic", "Neutral Gallery"},
+					Label:        i18n.T("Wall color"),
+					Help:         i18n.T("Sets the wall behind the frame."),
+					Options:      []string{i18n.T("Dynamic"), i18n.T("Neutral gallery")},
 					InitialValue: int(b.plugin.cfg.VirtualWallColor),
 					ApplyFunc: func(val interface{}) {
 						b.plugin.cfg.VirtualWallColor = VirtualWallMode(val.(int))
@@ -309,8 +274,8 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 				},
 				schema.BoolItem{
 					Name:         "virtualPaperMatting",
-					Label:        i18n.T("Virtual Paper Matting:"),
-					Help:         i18n.T("Add a white paper mat between the frame and the artwork."),
+					Label:        i18n.T("Paper mat"),
+					Help:         i18n.T("Adds a white paper mat between the frame and the artwork."),
 					InitialValue: b.plugin.cfg.VirtualPaperMatting,
 					ApplyFunc: func(val bool) {
 						b.plugin.cfg.VirtualPaperMatting = val
@@ -318,8 +283,8 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 				},
 				schema.SliderItem{
 					Name:         "virtualFrameSize",
-					Label:        i18n.T("Frame Size (%):"),
-					Help:         i18n.T("The size of the framed artwork relative to the total screen height."),
+					Label:        i18n.T("Frame size"),
+					Help:         i18n.T("Height of the framed artwork as a share of the screen."),
 					Min:          50,
 					Max:          100,
 					Step:         1,
@@ -337,8 +302,8 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 			Items: []schema.ItemSchema{
 				schema.BoolItem{
 					Name:         "pauseWhenBusy",
-					Label:        i18n.T("Pause when busy:"),
-					Help:         i18n.T("Pauses rotation and downloads when a fullscreen game, video, or presentation is detected."),
+					Label:        i18n.T("Pause when busy"),
+					Help:         i18n.T("Pauses rotation and downloads during fullscreen games, videos, or presentations."),
 					InitialValue: b.plugin.cfg.GetPauseWhenBusy(),
 					ApplyFunc: func(val bool) {
 						b.plugin.cfg.SetPauseWhenBusy(val)
@@ -349,9 +314,9 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 				},
 				schema.AppPickerItem{
 					Name:         "gateGameProcesses",
-					Label:        i18n.T("Pause for specific apps & games:"),
-					Help:         i18n.T("Automatically pause wallpaper changes whenever one of these apps or games is running in the foreground."),
-					ButtonText:   i18n.T("Add App or Game..."),
+					Label:        i18n.T("Pause for apps and games"),
+					Help:         i18n.T("Pauses wallpaper changes while any of these apps is in the foreground."),
+					ButtonText:   i18n.T("Add app or game..."),
 					InitialValue: b.plugin.cfg.GetGameProcesses(),
 					ApplyFunc: func(val []string) {
 						b.plugin.cfg.SetGameProcesses(val)
@@ -362,14 +327,14 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 				},
 				schema.TextItem{
 					Name:         "gateGraceMinutes",
-					Label:        i18n.T("Manual resume grace period (mins):"),
-					Help:         i18n.T("Minutes to keep rotation active after you manually resume play while busy."),
+					Label:        i18n.T("Resume grace period"),
+					Help:         i18n.T("Minutes rotation stays on after you resume it manually while busy."),
 					InitialValue: strconv.Itoa(b.plugin.cfg.GetGateGraceMinutes()),
 					IsNumeric:    true,
 					Validator: func(s string) error {
 						val, err := strconv.Atoi(strings.TrimSpace(s))
 						if err != nil || val < 0 {
-							return errors.New(i18n.T("Must be a positive integer or 0"))
+							return errors.New(i18n.T("Enter a whole number of minutes, or 0."))
 						}
 						return nil
 					},
@@ -390,8 +355,8 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 			Items: []schema.ItemSchema{
 				schema.BoolItem{
 					Name:         "batterySaver",
-					Label:        i18n.T("Battery saver:"),
-					Help:         i18n.T("Pauses rotation and background activity when running on battery below the chosen threshold."),
+					Label:        i18n.T("Battery saver"),
+					Help:         i18n.T("Pauses rotation and background activity on battery below the threshold."),
 					InitialValue: b.plugin.cfg.GetBatterySaver(),
 					ApplyFunc: func(val bool) {
 						b.plugin.cfg.SetBatterySaver(val)
@@ -402,8 +367,8 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 				},
 				schema.SelectItem{
 					Name:         "batterySaverLevel",
-					Label:        i18n.T("Battery threshold:"),
-					Help:         i18n.T("Engage battery saver when charge drops to or below this percentage."),
+					Label:        i18n.T("Battery threshold"),
+					Help:         i18n.T("Battery saver starts at or below this charge."),
 					Options:      []string{"10%", "15%", "20%", "25%"},
 					InitialValue: b.plugin.cfg.GetBatterySaverLevel(),
 					ApplyFunc: func(val interface{}) {
@@ -421,9 +386,9 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 			Items: []schema.ItemSchema{
 				schema.ButtonItem{
 					Name:       "refreshDisplays",
-					Label:      i18n.T("Display Configuration:"),
-					Help:       i18n.T("Synchronize Spice with currently connected monitors. Use this if you plugged or unplugged a monitor while Spice was running."),
-					ButtonText: i18n.T("Refresh Displays"),
+					Label:      i18n.T("Display configuration"),
+					Help:       i18n.T("Use after you connect or disconnect a display while Spice is running."),
+					ButtonText: i18n.T("Refresh displays"),
 					OnPressed: func() {
 						b.plugin.SyncMonitors(true)
 					},
@@ -436,8 +401,8 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 			Items: []schema.ItemSchema{
 				schema.BoolItem{
 					Name:         "museumCollectionOTA",
-					Label:        i18n.T("Museum Collection OTA:"),
-					Help:         i18n.T("Over-the-Air updates for museum collections. If enabled, occasionally synchronizes curation files from the cloud to receive new curated collections without updating the app."),
+					Label:        i18n.T("Museum collection updates"),
+					Help:         i18n.T("Occasionally downloads new curated museum collections without an app update."),
 					InitialValue: b.plugin.cfg.GetMuseumCollectionOTA(),
 					ApplyFunc: func(val bool) {
 						b.plugin.cfg.SetMuseumCollectionOTA(val)
@@ -494,7 +459,7 @@ func (b *PrefsPanelBuilder) generalPageMeta() []schema.NavItem {
 		{
 			ID:          schema.NavPageDisplays,
 			Title:       i18n.T("Displays"),
-			Description: i18n.T("Keep Spice in sync with your connected monitors."),
+			Description: i18n.T("Keep Spice in sync with your connected displays."),
 			IconName:    "computer",
 			Order:       70,
 		},
@@ -739,7 +704,7 @@ func (b *PrefsPanelBuilder) createTitleFunc(p provider.ImageProvider) func() str
 	return func() string {
 		title := p.Title()
 		if title == "" {
-			title = i18n.Tf("Image Sources ({{.Name}})", map[string]any{"Name": p.Name()}) + "..."
+			title = i18n.Tf("Image sources ({{.Name}})", map[string]any{"Name": p.Name()}) + "..."
 		}
 		activeCount, _ := b.activeQueryCount(p)
 		if activeCount > 0 {

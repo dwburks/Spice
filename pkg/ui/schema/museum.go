@@ -42,7 +42,7 @@ func CreateMuseumSettingsPanel(cfg MuseumSettingsConfig, openURL func(string)) *
 			Items: []ItemSchema{
 				LabelItem{Text: cfg.Location, Importance: ImportanceLow},
 				HyperlinkItem{
-					Text: i18n.T("Open Access (CC0)"),
+					Text: i18n.T("Open access (CC0)"),
 					URL:  cfg.LicenseURL,
 				},
 			},
@@ -51,13 +51,13 @@ func CreateMuseumSettingsPanel(cfg MuseumSettingsConfig, openURL func(string)) *
 			Items: []ItemSchema{
 				ButtonItem{
 					Name:       prefix + "_web",
-					ButtonText: i18n.T("Visit Website"),
+					ButtonText: i18n.T("Visit website"),
 					IconName:   "Home",
 					OnPressed:  func() { openURL(cfg.WebsiteURL) },
 				},
 				ButtonItem{
 					Name:       prefix + "_visit",
-					ButtonText: i18n.T("Plan a Visit"),
+					ButtonText: i18n.T("Plan a visit"),
 					IconName:   "MapPin",
 					OnPressed: func() {
 						u := fmt.Sprintf("https://www.google.com/maps/search/?api=1&query=%s", url.QueryEscape(cfg.MapQuery))
@@ -77,8 +77,8 @@ func CreateMuseumSettingsPanel(cfg MuseumSettingsConfig, openURL func(string)) *
 	if cfg.MuseumFramingGetFunc != nil && cfg.MuseumFramingSetFunc != nil {
 		infoItems = append(infoItems, BoolItem{
 			Name:         prefix + "_museum_framing",
-			Label:        i18n.T("Display as Framed Gallery"),
-			Help:         i18n.T("Present all artwork from this collection inside a virtual museum frame with a dynamic background, regardless of its original dimensions."),
+			Label:        i18n.T("Display as framed gallery"),
+			Help:         i18n.T("Show this museum's artwork in a virtual frame, whatever its shape."),
 			InitialValue: cfg.MuseumFramingGetFunc(),
 			ApplyFunc:    cfg.MuseumFramingSetFunc,
 			NeedsRefresh: false,

@@ -501,9 +501,9 @@ func (p *Provider) CreateSettingsPanel(sm setting.SettingsManager) *schema.Panel
 				Items: []schema.ItemSchema{
 					schema.SecretItem{
 						Name:         apiKeyIdent,
-						Label:        i18n.T("wallhaven API Key:"),
+						Label:        i18n.T("wallhaven API key"),
 						InitialValue: p.cfg.GetWallhavenAPIKey(),
-						Placeholder:  i18n.T("Enter your wallhaven API Key"),
+						Placeholder:  i18n.T("Enter your wallhaven API key"),
 						OnVerify: func(key string) error {
 							ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 							defer cancel()
@@ -529,15 +529,15 @@ func (p *Provider) CreateSettingsPanel(sm setting.SettingsManager) *schema.Panel
 						},
 					},
 					schema.HyperlinkItem{
-						Text: i18n.T("Restricted content requires an API key. Get one here."),
+						Text: i18n.T("Get an API key for restricted content"),
 						URL:  "https://wallhaven.cc/settings/account",
 					},
 					schema.TextItem{
 						Name:          userIdent,
-						Label:         i18n.T("wallhaven Username:"),
-						Help:          i18n.T("Please enter your wallhaven.cc username"),
+						Label:         i18n.T("wallhaven username"),
+						Help:          i18n.T("Needed to sync your wallhaven collections."),
 						InitialValue:  p.cfg.GetWallhavenUsername(),
-						PlaceHolder:   i18n.T("Enter wallhaven.cc username"),
+						PlaceHolder:   i18n.T("Your wallhaven.cc username"),
 						DisplayStatus: true,
 						SkipApply:     true,
 						EnabledIf: func() bool {
@@ -551,7 +551,7 @@ func (p *Provider) CreateSettingsPanel(sm setting.SettingsManager) *schema.Panel
 					},
 					schema.AsyncButtonItem{
 						Name:            "VerifyUsername",
-						ButtonText:      i18n.T("Verify Username"),
+						ButtonText:      i18n.T("Verify username"),
 						LoadingText:     i18n.T("Verifying..."),
 						Style:           schema.ButtonStylePrimary,
 						TargetStatusKey: userIdent,
@@ -570,7 +570,7 @@ func (p *Provider) CreateSettingsPanel(sm setting.SettingsManager) *schema.Panel
 							currUser, _ := sm.GetValue(userIdent).(string)
 							apiKeyVal, _ := sm.GetValue(apiKeyIdent).(string)
 							if apiKeyVal == "" {
-								return errors.New(i18n.T("API Key required for verification"))
+								return errors.New(i18n.T("Save an API key before verifying your username."))
 							}
 							ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 							defer cancel()
@@ -597,8 +597,8 @@ func (p *Provider) CreateSettingsPanel(sm setting.SettingsManager) *schema.Panel
 				Items: []schema.ItemSchema{
 					schema.BoolItem{
 						Name:         syncIdent,
-						Label:        i18n.T("Keep Favorites (collections) Synced:"),
-						Help:         i18n.T("Automatically synchronize your wallhaven collections with Spice. New collections will be added as inactive queries."),
+						Label:        i18n.T("Sync collections"),
+						Help:         i18n.T("Keeps your wallhaven collections in Spice; new ones are added switched off."),
 						InitialValue: p.cfg.GetWallhavenSyncEnabled(),
 						NeedsRefresh: true,
 						EnabledIf: func() bool {
@@ -615,7 +615,7 @@ func (p *Provider) CreateSettingsPanel(sm setting.SettingsManager) *schema.Panel
 							p.cfg.SetWallhavenSyncEnabled(b)
 							go func() {
 								_ = p.Sync(context.Background())
-								sm.SetSettingStatus(syncIdent, i18n.T("Favorites Synced"), schema.ImportanceSuccess)
+								sm.SetSettingStatus(syncIdent, i18n.T("Collections synced"), schema.ImportanceSuccess)
 								sm.RefreshUI()
 							}()
 						},
@@ -629,11 +629,11 @@ func (p *Provider) CreateSettingsPanel(sm setting.SettingsManager) *schema.Panel
 // CreateQueryPanel creates the image query management panel.
 func (p *Provider) CreateQueryPanel(sm setting.SettingsManager, pendingUrl string) *schema.PanelSchema {
 	addCfg := schema.AddQueryConfig{
-		Title:           i18n.T("Add wallhaven Collection"),
+		Title:           i18n.T("Add wallhaven collection"),
 		URLPlaceholder:  "https://wallhaven.cc/search?q=...",
 		URLValidator:    WallhavenURLRegexp,
-		URLErrorMsg:     i18n.T("Invalid wallhaven URL"),
-		DescPlaceholder: i18n.T("Collection Description (e.g. Landscapes)"),
+		URLErrorMsg:     i18n.T("Enter a valid wallhaven URL."),
+		DescPlaceholder: i18n.T("Description, e.g. Landscapes"),
 		AddHandler: func(desc, url string, active bool) (string, error) {
 			apiURL, err := p.ParseURL(url)
 			if err != nil {
@@ -644,7 +644,7 @@ func (p *Provider) CreateQueryPanel(sm setting.SettingsManager, pendingUrl strin
 	}
 
 	editCfg := addCfg
-	editCfg.Title = i18n.T("Edit wallhaven Collection")
+	editCfg.Title = i18n.T("Edit wallhaven collection")
 	editCfg.AddHandler = nil
 	editCfg.UpdateHandler = func(id, desc, url string) (string, error) {
 		apiURL, err := p.ParseURL(url)
@@ -661,8 +661,8 @@ func (p *Provider) CreateQueryPanel(sm setting.SettingsManager, pendingUrl strin
 	return &schema.PanelSchema{
 		Sections: []schema.SectionSchema{
 			{
-				Title:       i18n.T("wallhaven Queries and Collections (Favorites)"),
-				Description: i18n.T("Manage your wallhaven.cc image queries and collections here. Paste your image search or collection URL and Spice will take care of the rest."),
+				Title:       i18n.T("Collections"),
+				Description: i18n.T("Paste a wallhaven search or collection URL to add it."),
 				Items: []schema.ItemSchema{
 					schema.QueryListItem{
 						GetQueries: func() []schema.Query {
@@ -691,7 +691,7 @@ func (p *Provider) CreateQueryPanel(sm setting.SettingsManager, pendingUrl strin
 					},
 					schema.ButtonItem{
 						Name:       "wallhaven_add",
-						ButtonText: i18n.T("Add New Collection"),
+						ButtonText: i18n.T("Add collection"),
 						IconName:   "add",
 						OnPressed: func() {
 							sm.ShowAddQueryDialog(addCfg, "", "", sm.RefreshUI)

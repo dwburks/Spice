@@ -85,9 +85,23 @@ type TextItem struct {
 	SkipApply          bool // When true, changes won't register with the Apply button (e.g. verify-first fields)
 	EnabledIf          func() bool
 	VisibleIf          func() bool
+
+	// Presets, when set, render a select of common values in front of the entry. Picking a preset
+	// sets the entry's text (staged exactly like typing it); CustomLabel is the extra option that
+	// reveals the entry for any other value. The entry remains the registered setting, so the
+	// stored value and the staged-apply path are unchanged.
+	Presets     []TextPreset
+	CustomLabel string
+	Suffix      string // Optional unit shown after the entry (e.g. "minutes")
 }
 
 func (TextItem) isItemSchema() {}
+
+// TextPreset is one named value offered by a TextItem's preset select.
+type TextPreset struct {
+	Label string
+	Value string
+}
 
 // SelectItem represents a dropdown/select field.
 type SelectItem struct {

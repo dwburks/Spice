@@ -723,7 +723,7 @@ func (sa *SpiceApp) buildPreferencesNav(sm *SettingsManager, initialTab string) 
 	// Language Selection
 	langOptions := i18n.GetLanguageNames()
 	langDisplayOptions := i18n.GetLanguageNames()
-	langDisplayOptions[0] = i18n.T("System Default")
+	langDisplayOptions[0] = i18n.T("System default")
 	currentLang := sa.appConfig.GetLanguage()
 	initialLangIndex := 0
 	for idx, l := range langOptions {
@@ -751,9 +751,9 @@ func (sa *SpiceApp) buildPreferencesNav(sm *SettingsManager, initialTab string) 
 							Items: []schema.ItemSchema{
 								schema.ButtonItem{
 									Name:       "manageWindowsStartup",
-									Label:      i18n.T("Start with Windows:"),
-									Help:       i18n.T("Spice registers itself to start with Windows. Click to open Windows Settings to enable or disable this feature."),
-									ButtonText: i18n.T("Manage in Windows Settings"),
+									Label:      i18n.T("Start with Windows"),
+									Help:       i18n.T("Turn Spice on or off in the Windows startup apps list."),
+									ButtonText: i18n.T("Open Windows Settings"),
 									OnPressed: func() {
 										u, _ := url.Parse("ms-settings:startupapps")
 										if u != nil {
@@ -766,9 +766,9 @@ func (sa *SpiceApp) buildPreferencesNav(sm *SettingsManager, initialTab string) 
 								},
 								schema.ButtonItem{
 									Name:       "manageMacStartup",
-									Label:      i18n.T("Start at Login:"),
-									Help:       i18n.T("Click to open macOS System Settings to add or remove Spice from your Login Items."),
-									ButtonText: i18n.T("Manage in macOS Settings"),
+									Label:      i18n.T("Start at login"),
+									Help:       i18n.T("Add or remove Spice in your macOS login items."),
+									ButtonText: i18n.T("Open System Settings"),
 									OnPressed: func() {
 										_ = exec.Command("open", "x-apple.systempreferences:com.apple.LoginItems-Settings.extension").Start()
 									},
@@ -785,8 +785,8 @@ func (sa *SpiceApp) buildPreferencesNav(sm *SettingsManager, initialTab string) 
 									Name:         "theme",
 									Options:      themeOptions,
 									InitialValue: initialThemeIndex,
-									Label:        i18n.T("Theme:"),
-									Help:         i18n.T("Select the application theme."),
+									Label:        i18n.T("Theme"),
+									Help:         i18n.T("Choose light or dark, or follow your system."),
 									ApplyFunc: func(val interface{}) {
 										selectedIndex := val.(int)
 										if selectedIndex < 0 || selectedIndex >= len(themeOptions) {
@@ -802,8 +802,8 @@ func (sa *SpiceApp) buildPreferencesNav(sm *SettingsManager, initialTab string) 
 									Name:         "language",
 									Options:      langDisplayOptions,
 									InitialValue: initialLangIndex,
-									Label:        i18n.T("Language:"),
-									Help:         i18n.T("Select the application language. Restart may be required for full effect."),
+									Label:        i18n.T("Language"),
+									Help:         i18n.T("Some text changes only after you restart Spice."),
 									NeedsRefresh: true,
 									ApplyFunc: func(val interface{}) {
 										selectedIndex := val.(int)
@@ -836,8 +836,8 @@ func (sa *SpiceApp) buildPreferencesNav(sm *SettingsManager, initialTab string) 
 								schema.BoolItem{
 									Name:         "enableNotifications",
 									InitialValue: sa.appConfig.GetAppNotificationsEnabled(),
-									Label:        i18n.T("Enable System Notifications:"),
-									Help:         i18n.T("Enable or disable system notifications from Spice."),
+									Label:        i18n.T("System notifications"),
+									Help:         i18n.T("Show notifications from Spice."),
 									ApplyFunc: func(b bool) {
 										sa.appConfig.SetAppNotificationsEnabled(b)
 									},
@@ -845,8 +845,8 @@ func (sa *SpiceApp) buildPreferencesNav(sm *SettingsManager, initialTab string) 
 								schema.BoolItem{
 									Name:         "enableUpdateCheck",
 									InitialValue: sa.appConfig.GetUpdateCheckEnabled(),
-									Label:        i18n.T("Enable New Version Check:"),
-									Help:         i18n.T("Automatically check for new versions of Spice on startup."),
+									Label:        i18n.T("Check for updates"),
+									Help:         i18n.T("Look for a new version of Spice at startup."),
 									ApplyFunc: func(b bool) {
 										sa.appConfig.SetUpdateCheckEnabled(b)
 									},
@@ -869,8 +869,8 @@ func (sa *SpiceApp) buildPreferencesNav(sm *SettingsManager, initialTab string) 
 								schema.BoolItem{
 									Name:         "enableShortcuts",
 									InitialValue: !wallpaper.GetInstance().GetShortcutsDisabled(),
-									Label:        i18n.T("Enable global shortcuts:"),
-									Help:         i18n.T("Use keyboard shortcuts to control wallpapers. Disable if they conflict with other apps."),
+									Label:        i18n.T("Global shortcuts"),
+									Help:         i18n.T("Control wallpapers from the keyboard; turn off if they clash with other apps."),
 									ApplyFunc: func(val bool) {
 										wallpaper.GetInstance().SetShortcutsDisabled(!val)
 										hotkey.StartListeners(GetPluginManager())
@@ -879,8 +879,8 @@ func (sa *SpiceApp) buildPreferencesNav(sm *SettingsManager, initialTab string) 
 								schema.BoolItem{
 									Name:         "enableTargetedShortcuts",
 									InitialValue: !wallpaper.GetInstance().GetTargetedShortcutsDisabled(),
-									Label:        i18n.T("Enable Display Specific Shortcuts (Alt + Arrow + 1-9):"),
-									Help:         i18n.T("Disable this if Alt+Arrow conflicts with your browser or other apps."),
+									Label:        i18n.T("Per-display shortcuts"),
+									Help:         i18n.T("Alt + arrow + 1–9 acts on one display; turn off if it clashes with your browser or other apps."),
 									ApplyFunc: func(val bool) {
 										wallpaper.GetInstance().SetTargetedShortcutsDisabled(!val)
 										hotkey.StartListeners(GetPluginManager())
@@ -895,7 +895,7 @@ func (sa *SpiceApp) buildPreferencesNav(sm *SettingsManager, initialTab string) 
 								},
 								schema.HyperlinkItem{
 									ID:   "shortcutsLink",
-									Text: i18n.T("View all shortcuts →"),
+									Text: i18n.T("View all shortcuts"),
 									URL:  "https://github.com/dixieflatline76/Spice/blob/main/docs/user_guide.md#keyboard-shortcuts",
 								},
 							},
@@ -914,8 +914,8 @@ func (sa *SpiceApp) buildPreferencesNav(sm *SettingsManager, initialTab string) 
 								schema.BoolItem{
 									Name:         "enableDebugLogging",
 									InitialValue: sa.appConfig.GetDebugLoggingEnabled(),
-									Label:        i18n.T("Enable Debug Logging:"),
-									Help:         i18n.T("Write verbose debug entries to the log file. Useful for troubleshooting."),
+									Label:        i18n.T("Debug logging"),
+									Help:         i18n.T("Write detailed entries to the log file for troubleshooting."),
 									ApplyFunc: func(b bool) {
 										sa.appConfig.SetDebugLoggingEnabled(b)
 										utilLog.SetDebugEnabled(b)
@@ -973,7 +973,7 @@ func confirmDiscardOnClose(w fyne.Window, sm *SettingsManager) {
 	}
 	d := dialog.NewConfirm(
 		i18n.T("Discard unsaved changes?"),
-		i18n.T("You have unsaved changes. Close the window and discard them?"),
+		i18n.T("Closing the window discards the changes you haven't saved."),
 		func(discard bool) {
 			if discard {
 				w.Close()

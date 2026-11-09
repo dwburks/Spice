@@ -41,6 +41,7 @@ type SettingsManager struct {
 	// Inset-list renderer state.
 	stagers         map[string]func(interface{}) // Re-stage a switch after programmatic SetValue
 	valueSetters    map[string]func(interface{}) // Custom SetValue handlers (e.g. app picker lists)
+	afterSetHooks   map[string]func(interface{}) // Run after a programmatic SetValue (e.g. preset selects)
 	rowDots         map[string][]*themedRect     // Setting name -> its rows' "changed" dots
 	pageOf          map[string]string            // Setting name -> preferences page ID
 	currentPage     string                       // Page ID being rendered (set by the nav renderer)
@@ -105,6 +106,7 @@ func NewSettingsManager(window fyne.Window) setting.SettingsManager {
 		assetMgr:            asset.NewManager(),
 		stagers:             make(map[string]func(interface{})),
 		valueSetters:        make(map[string]func(interface{})),
+		afterSetHooks:       make(map[string]func(interface{})),
 		rowDots:             make(map[string][]*themedRect),
 		pageOf:              make(map[string]string),
 	}
@@ -226,6 +228,9 @@ func (sm *SettingsManager) setValueNow(name string, val interface{}) {
 			v.SetText(s)
 			v.Refresh()
 		}
+		if hook, ok := sm.afterSetHooks[name]; ok {
+			hook(val)
+		}
 	case *widget.Select:
 		if i, ok := val.(int); ok {
 			v.SetSelectedIndex(i)
@@ -337,7 +342,7 @@ func createApplyButton(sm *SettingsManager) *widget.Button {
 	applyButton = widget.NewButton(i18n.T("Save changes"), func() {
 		originalText := applyButton.Text
 		sm.applyButton.Disable()
-		sm.applyButton.SetText(i18n.T("Applying changes, please wait..."))
+		sm.applyButton.SetText(i18n.T("Saving..."))
 		sm.applyButton.Refresh()
 		fyne.Do(func() {
 			defer func() {
@@ -799,7 +804,7 @@ func (sm *SettingsManager) showQueryDialog(cfg schema.AddQueryConfig, editID, in
 				return false
 			}
 		}
-		formStatus.SetText(i18n.T("Everything looks good"))
+		formStatus.SetText(i18n.T("Looks good"))
 		formStatus.Importance = widget.SuccessImportance
 		formStatus.Refresh()
 		return true
@@ -829,9 +834,9 @@ func (sm *SettingsManager) showQueryDialog(cfg schema.AddQueryConfig, editID, in
 	if cfg.Description != "" {
 		inputContainer.Add(widget.NewLabel(cfg.Description))
 	}
-	inputContainer.Add(sm.CreateSettingTitleLabel(i18n.T("URL / Search Term:")))
+	inputContainer.Add(sm.CreateSettingTitleLabel(i18n.T("URL or search term")))
 	inputContainer.Add(urlEntry)
-	inputContainer.Add(sm.CreateSettingTitleLabel(i18n.T("Description:")))
+	inputContainer.Add(sm.CreateSettingTitleLabel(i18n.T("Description")))
 	inputContainer.Add(descEntry)
 	inputContainer.Add(formStatus)
 	if !editing {

@@ -186,8 +186,8 @@ func (p *Provider) CreateQueryPanel(sm setting.SettingsManager, pendingUrl strin
 				Items: []schema.ItemSchema{
 					&schema.OAuthPickerItem{
 						Name:  "google_photos_picker",
-						Label: i18n.T("Google Photos Extension"),
-						Help:  i18n.T("Authorize your Google account to select and download your personal photo albums directly into Spice."),
+						Label: i18n.T("Google account"),
+						Help:  i18n.T("Connect your Google account to pick photos to download into Spice."),
 						CheckAuthStatus: func() (bool, bool) {
 							token := p.cfg.GetGooglePhotosToken()
 							if token == "" {
@@ -208,18 +208,18 @@ func (p *Provider) CreateQueryPanel(sm setting.SettingsManager, pendingUrl strin
 						},
 						OnLaunchPicker: func(ctx context.Context, updateStatus func(string)) (int, string, error) {
 							// 1. Create Session
-							updateStatus(i18n.T("Creating Web Session..."))
+							updateStatus(i18n.T("Starting a browser session..."))
 							session, err := p.CreatePickerSession(ctx)
 							if err != nil {
 								return 0, "", err
 							}
 
 							// 2. Open Browser
-							updateStatus(i18n.T("Please select photos in your browser..."))
+							updateStatus(i18n.T("Select photos in your browser..."))
 							sm.OpenURL(session.PickerURI)
 
 							// 3. Poll
-							updateStatus(i18n.T("Waiting for selection (check browser)..."))
+							updateStatus(i18n.T("Waiting for your selection in the browser..."))
 							finalSession, err := p.PollSession(ctx, session.ID, session.PollingConfig.PollInterval)
 							if err != nil {
 								return 0, "", err

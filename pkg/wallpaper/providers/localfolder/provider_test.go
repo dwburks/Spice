@@ -21,7 +21,7 @@ func TestNewProvider(t *testing.T) {
 	p := NewProvider(cfg)
 	assert.NotNil(t, p)
 	assert.Equal(t, "LocalFolder", p.ID())
-	assert.Equal(t, "Local Folders", p.Title())
+	assert.Equal(t, "Local folders", p.Title())
 	assert.Equal(t, provider.TypePersonal, p.Type())
 	assert.True(t, p.SupportsUserQueries())
 }

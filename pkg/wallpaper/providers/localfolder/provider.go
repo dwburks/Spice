@@ -52,7 +52,7 @@ func (p *Provider) ID() string {
 }
 
 func (p *Provider) Name() string {
-	return i18n.T("Local Folders")
+	return i18n.T("Local folders")
 }
 
 func (p *Provider) Type() provider.ProviderType {
@@ -68,7 +68,7 @@ func (p *Provider) SupportsUserQueries() bool {
 }
 
 func (p *Provider) Title() string {
-	return "Local Folders"
+	return i18n.T("Local folders")
 }
 
 func (p *Provider) HomeURL() string {
@@ -179,13 +179,13 @@ func (p *Provider) CreateSettingsPanel(_ setting.SettingsManager) *schema.PanelS
 
 	if runtime.GOOS == "windows" {
 		items = append(items, schema.LabelItem{
-			Text:       i18n.T("Note (Windows): Due to OS limitations, to select a folder you must click on any image file inside the desired folder and then click 'Open'. The entire folder containing that image will be added."),
+			Text:       i18n.T("On Windows, select any image inside the folder you want and click Open; Spice adds the whole folder."),
 			Importance: schema.ImportanceLow,
 		})
 	}
 
 	return &schema.PanelSchema{
-		Description: i18n.T("Browse to a folder on your computer containing wallpaper images."),
+		Description: i18n.T("Add folders of images from this computer."),
 		Sections: []schema.SectionSchema{
 			{
 				Compact: true,
@@ -200,7 +200,7 @@ func (p *Provider) CreateQueryPanel(sm setting.SettingsManager, _ string) *schem
 	return &schema.PanelSchema{
 		Sections: []schema.SectionSchema{
 			{
-				Title: i18n.T("Local Folder Sources"),
+				Title: i18n.T("Folders"),
 				Items: []schema.ItemSchema{
 					schema.QueryListItem{
 						GetQueries: func() []schema.Query {
@@ -238,7 +238,7 @@ func (p *Provider) CreateQueryPanel(sm setting.SettingsManager, _ string) *schem
 					},
 					schema.FolderPickerItem{
 						Name:       "local_folder_add",
-						ButtonText: i18n.T("Add Folder"),
+						ButtonText: i18n.T("Add folder"),
 						OnFolderSelected: func(path string) (string, error) {
 							desc := path
 							if len(desc) > 100 {

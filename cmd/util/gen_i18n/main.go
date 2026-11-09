@@ -58,6 +58,10 @@ var allowIdenticalToEnglish = map[string]bool{
 	"Diagnostics": true,
 	"Rotation":    true,
 	"Sources":     true,
+	// Preferences copy (P5): identical in French ("Collections", "Description", "minutes")
+	"Collections": true,
+	"Description": true,
+	"minutes":     true,
 
 	// Brand names / tech terms kept in English
 	"Pexels":                  true,

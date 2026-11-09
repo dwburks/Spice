@@ -34,7 +34,7 @@ func CreateCuratedQueryPanel(p provider.ImageProvider, sm setting.SettingsManage
 	return &schema.PanelSchema{
 		Sections: []schema.SectionSchema{
 			{
-				Title: i18n.T("Curated Collections"),
+				Title: i18n.T("Curated collections"),
 				Items: items,
 			},
 		},
@@ -60,7 +60,7 @@ func buildCuratedUIItem(p provider.ImageProvider, sm setting.SettingsManager, cf
 
 	if entry.Type == "curated" && len(entry.IDs) > 0 {
 		actionText = i18n.T("Preview")
-		label = fmt.Sprintf("%s (%d Pieces)", label, len(entry.IDs))
+		label = fmt.Sprintf("%s (%d pieces)", label, len(entry.IDs))
 
 		actionFunc = func() {
 			safeName := strings.ReplaceAll(strings.ToLower(entry.Key), " ", "_")
@@ -85,7 +85,7 @@ func buildCuratedUIItem(p provider.ImageProvider, sm setting.SettingsManager, cf
 	} else if entry.Type == "curated" && len(entry.Items) > 0 {
 		// Pre-resolved items (e.g. Rijksmuseum)
 		actionText = i18n.T("Preview")
-		label = fmt.Sprintf("%s (%d Pieces)", label, len(entry.Items))
+		label = fmt.Sprintf("%s (%d pieces)", label, len(entry.Items))
 
 		actionFunc = func() {
 			safeName := strings.ReplaceAll(strings.ToLower(entry.Key), " ", "_")

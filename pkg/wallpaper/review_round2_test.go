@@ -654,7 +654,7 @@ func TestGeneralTab_StorageSettingsItems(t *testing.T) {
 	maxDL, ok := items[idx+1].(schema.SelectItem)
 	require.True(t, ok)
 	assert.Equal(t, "maxDownloadSize", maxDL.Name)
-	assert.Equal(t, "Max Download Size:", maxDL.Label)
+	assert.Equal(t, "Max download size", maxDL.Label)
 	assert.Equal(t, []string{"10 MB", "25 MB", "50 MB", "100 MB", "No limit"}, maxDL.Options)
 	assert.Equal(t, 1, maxDL.InitialValue)
 

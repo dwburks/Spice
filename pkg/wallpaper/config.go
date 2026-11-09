@@ -69,6 +69,7 @@ type Config struct {
 
 	// Callbacks
 	QueryRemovedCallback      func(queryID string) `json:"-"`
+	QueryURLChangedCallback   func(queryID string) `json:"-"`
 	QueryDisabledCallback     func(queryID string) `json:"-"`
 	QueryEnabledCallback      func(queryID string) `json:"-"`
 	FavoritesClearedCallback  func()               `json:"-"`
@@ -288,6 +289,12 @@ func (c *Config) AddProviderQuery(description, url, provider string, active, man
 		return "", fmt.Errorf("duplicate query: this URL already exists")
 	}
 
+	// An edited query keeps its original ID, so also compare stored URLs within the provider.
+	if provider != "Favorites" && c.isDuplicateProviderURL(provider, url) {
+		log.Debugf("[Config] AddProviderQuery: duplicate stored URL for provider=%s", provider)
+		return "", fmt.Errorf("duplicate query: this URL already exists")
+	}
+
 	newQuery := ImageQuery{
 		ID:          id,
 		Description: description,
@@ -305,6 +312,57 @@ func (c *Config) AddProviderQuery(description, url, provider string, active, man
 		go c.QueryEnabledCallback(id)
 	}
 	return id, nil
+}
+
+// UpdateQuery edits the description and URL of an existing, non-managed query in place.
+// The query keeps its ID, Active state, Provider and Managed flag. If the URL changed,
+// QueryURLChangedCallback is triggered so the plugin can discard images fetched for the old search.
+// The caller is responsible for passing a URL already normalized the same way it would be for AddProviderQuery.
+func (c *Config) UpdateQuery(id, desc, url string) error {
+	desc = strings.TrimSpace(desc)
+	url = strings.TrimSpace(url)
+	if desc == "" {
+		return fmt.Errorf("query description cannot be empty")
+	}
+	if url == "" {
+		return fmt.Errorf("query URL cannot be empty")
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	idx, err := c.findQueryIndex(id)
+	if err != nil {
+		return err
+	}
+	q := c.Queries[idx]
+	if q.Managed {
+		return fmt.Errorf("cannot edit a managed system query: %s", id)
+	}
+
+	urlChanged := q.URL != url
+	if urlChanged {
+		// Mirror AddProviderQuery's dedupe (provider-scoped ID), and also compare stored URLs
+		// because an edited query keeps its original ID.
+		candidateID := GenerateQueryID(q.Provider + ":" + url)
+		for i, other := range c.Queries {
+			if i == idx || other.Provider != q.Provider {
+				continue
+			}
+			if other.ID == candidateID || other.URL == url {
+				return fmt.Errorf("duplicate query: this URL already exists")
+			}
+		}
+	}
+
+	c.Queries[idx].Description = desc
+	c.Queries[idx].URL = url
+	c.save()
+
+	if urlChanged && c.QueryURLChangedCallback != nil {
+		go c.QueryURLChangedCallback(id)
+	}
+	return nil
 }
 
 // AddImageQuery adds a new Wallhaven image query.
@@ -326,6 +384,16 @@ func (c *Config) AddWikimediaQuery(description, url string, active bool) (string
 func (c *Config) isDuplicateID(id string) bool {
 	for _, q := range c.Queries {
 		if q.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// isDuplicateProviderURL reports whether any query of the given provider already stores this exact URL.
+func (c *Config) isDuplicateProviderURL(provider, url string) bool {
+	for _, q := range c.Queries {
+		if q.Provider == provider && q.URL == url {
 			return true
 		}
 	}
@@ -433,6 +501,13 @@ func (c *Config) SetQueryRemovedCallback(callback func(queryID string)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.QueryRemovedCallback = callback
+}
+
+// SetQueryURLChangedCallback sets the callback for when a query's URL is edited.
+func (c *Config) SetQueryURLChangedCallback(callback func(queryID string)) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.QueryURLChangedCallback = callback
 }
 
 // SetQueryDisabledCallback sets the callback for when a query is disabled.

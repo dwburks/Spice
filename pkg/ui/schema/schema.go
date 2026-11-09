@@ -264,6 +264,11 @@ type QueryListItem struct {
 	DeleteLabel          string // Text for the action button. Default is "Delete".
 	ForceActionEnabled   bool   // Enable the action button even for managed queries.
 	DeleteConfirmMessage string // Custom message for the confirmation dialog.
+
+	// EditConfig, when non-nil, shows an edit button on each non-managed row that opens the
+	// add/edit dialog prefilled with the query's description and display URL, and commits via
+	// EditConfig.UpdateHandler. Nil means queries of this list are not editable.
+	EditConfig *AddQueryConfig
 }
 
 func (QueryListItem) isItemSchema() {}
@@ -303,6 +308,10 @@ type AddQueryConfig struct {
 	// AddHandler performs the actual addition of the query.
 	// It returns the new query ID and an error if it fails.
 	AddHandler func(desc, url string, active bool) (string, error)
+
+	// UpdateHandler performs an in-place edit of an existing query (used when the config is
+	// supplied as QueryListItem.EditConfig). It returns an error if the edit is rejected.
+	UpdateHandler func(id, desc, url string) error
 }
 
 // SecretItem represents a sensitive credential (like an API key).

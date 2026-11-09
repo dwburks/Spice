@@ -331,6 +331,7 @@ func (wp *Plugin) Init(manager ui.PluginManager) {
 	}
 
 	wp.cfg.SetQueryRemovedCallback(wp.onQueryRemoved)
+	wp.cfg.SetQueryURLChangedCallback(wp.onQueryURLChanged)
 	wp.cfg.SetQueryDisabledCallback(wp.onQueryDisabled)
 	wp.cfg.SetQueryEnabledCallback(wp.onQueryEnabled)
 	wp.cfg.SetFavoritesClearedCallback(wp.ResetFavorites)
@@ -1409,6 +1410,23 @@ func (wp *Plugin) onQueryRemoved(queryID string) {
 	wp.downloadMutex.Lock()
 	delete(wp.queryPages, queryID)
 	wp.downloadMutex.Unlock()
+}
+
+// onQueryURLChanged discards everything fetched for a query's previous URL and restarts it at page 1.
+func (wp *Plugin) onQueryURLChanged(queryID string) {
+	log.Debugf("Plugin: Query %s URL changed. Clearing stale images...", queryID)
+	wp.CancelQueryContext(queryID)
+	wp.store.RemoveByQueryID(queryID)
+	wp.downloadMutex.Lock()
+	delete(wp.queryPages, queryID)
+	wp.downloadMutex.Unlock()
+
+	// Inactive queries are not fetched; they will start fresh when re-enabled.
+	if q, ok := wp.cfg.GetQuery(queryID); ok && q.Active {
+		// Abort blocked fetch loops tied to the old URL, then replenish from the new one.
+		wp.CancelFetchContext()
+		go wp.RequestFetch()
+	}
 }
 
 func (wp *Plugin) onQueryDisabled(queryID string) {

@@ -639,6 +639,17 @@ func (p *Provider) CreateQueryPanel(sm setting.SettingsManager, pendingUrl strin
 		},
 	}
 
+	editCfg := addCfg
+	editCfg.Title = i18n.T("Edit wallhaven Collection")
+	editCfg.AddHandler = nil
+	editCfg.UpdateHandler = func(id, desc, url string) error {
+		apiURL, err := p.ParseURL(url)
+		if err != nil {
+			return err
+		}
+		return p.cfg.UpdateQuery(id, desc, apiURL)
+	}
+
 	if pendingUrl != "" {
 		sm.ShowAddQueryDialog(addCfg, pendingUrl, "", sm.RefreshUI)
 	}
@@ -680,6 +691,7 @@ func (p *Provider) CreateQueryPanel(sm setting.SettingsManager, pendingUrl strin
 						GetDisplayURL: func(q schema.Query) *url.URL {
 							return p.getDisplayURL(q)
 						},
+						EditConfig: &editCfg,
 					},
 				},
 			},

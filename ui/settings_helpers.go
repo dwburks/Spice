@@ -16,10 +16,6 @@ func (sm *SettingsManager) CreateSectionTitleLabel(desc string) *widget.Label {
 	label.Wrapping = fyne.TextWrapWord
 	label.Importance = widget.HighImportance
 	label.TextStyle = fyne.TextStyle{Bold: true}
-	if sm.isRenderingCompact {
-		// Use a smaller header style if compact is requested
-		label.Importance = widget.MediumImportance
-	}
 	return label
 }
 

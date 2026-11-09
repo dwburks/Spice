@@ -54,6 +54,10 @@ var allowIdenticalToEnglish = map[string]bool{
 	"Virtual Frame Aspect Mismatches:":                                            true,
 	"Close Tuning to Resume":                                                      true,
 	"Controls Disabled":                                                           true,
+	// Preferences redesign: identical in French ("Diagnostics", "Rotation", "Sources")
+	"Diagnostics": true,
+	"Rotation":    true,
+	"Sources":     true,
 
 	// Brand names / tech terms kept in English
 	"Pexels":                  true,

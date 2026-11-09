@@ -414,15 +414,12 @@ const pexAPIIdent = "pexelsAPIKey"
 // CreateSettingsPanel returns the declarative UI for Pexels settings.
 func (p *Provider) CreateSettingsPanel(sm setting.SettingsManager) *schema.PanelSchema {
 	return &schema.PanelSchema{
+		Description: i18n.T("Pexels provides high quality and completely free stock photos licensed under the Pexels license."),
 		Sections: []schema.SectionSchema{
 			{
-				Title:   i18n.T("Pexels"),
+				Title:   i18n.T("Account"),
 				Compact: true,
 				Items: []schema.ItemSchema{
-					schema.LabelItem{
-						Text:       i18n.T("Pexels provides high quality and completely free stock photos licensed under the Pexels license."),
-						Importance: schema.ImportanceLow,
-					},
 					schema.SecretItem{
 						Name:         pexAPIIdent,
 						Label:        i18n.T("pexels API Key:"),
@@ -480,14 +477,6 @@ func (p *Provider) CreateQueryPanel(sm setting.SettingsManager, pendingUrl strin
 				Title:       i18n.T("Pexels Queries"),
 				Description: i18n.T("Manage your Pexels image queries here."),
 				Items: []schema.ItemSchema{
-					schema.ButtonItem{
-						Name:       "pexels_add",
-						ButtonText: i18n.T("Add New Collection"),
-						IconName:   "add",
-						OnPressed: func() {
-							sm.ShowAddQueryDialog(addCfg, "", "", sm.RefreshUI)
-						},
-					},
 					schema.QueryListItem{
 						GetQueries: func() []schema.Query {
 							queries := p.cfg.GetPexelsQueries()
@@ -508,6 +497,14 @@ func (p *Provider) CreateQueryPanel(sm setting.SettingsManager, pendingUrl strin
 						RemoveQuery:  p.cfg.RemovePexelsQuery,
 						GetDisplayURL: func(q schema.Query) *url.URL {
 							return p.getDisplayURL(q)
+						},
+					},
+					schema.ButtonItem{
+						Name:       "pexels_add",
+						ButtonText: i18n.T("Add New Collection"),
+						IconName:   "add",
+						OnPressed: func() {
+							sm.ShowAddQueryDialog(addCfg, "", "", sm.RefreshUI)
 						},
 					},
 				},

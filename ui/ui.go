@@ -26,6 +26,7 @@ import (
 	"golang.org/x/image/math/fixed"
 
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
 	"github.com/disintegration/imaging"
 	"github.com/dixieflatline76/Spice/v2/asset"
@@ -45,18 +46,19 @@ import (
 // SpiceApp represents the application
 type SpiceApp struct {
 	fyne.App
-	assetMgr     *asset.Manager
-	trayMenu     *fyne.Menu
-	splash       fyne.Window   // Splash window for initial setup
-	notifiers    []ui.Notifier // List of notifiers to activate
-	plugins      []ui.Plugin   // List of plugins to activate
-	os           OS            // Operating system interface
-	appConfig    *config.AppConfig
-	prefsWindow  fyne.Window        // Singleton preferences window
-	prefsTabs    *container.AppTabs // Reference to the main tabs in preferences
-	tabItems     map[string]*container.TabItem
-	trayMu       sync.Mutex
-	trayDebounce *time.Timer
+	assetMgr       *asset.Manager
+	trayMenu       *fyne.Menu
+	splash         fyne.Window   // Splash window for initial setup
+	notifiers      []ui.Notifier // List of notifiers to activate
+	plugins        []ui.Plugin   // List of plugins to activate
+	os             OS            // Operating system interface
+	appConfig      *config.AppConfig
+	prefsWindow    fyne.Window      // Singleton preferences window
+	prefsNav       *prefsNavView    // Rendered preferences navigation (sidebar + pages)
+	prefsSM        *SettingsManager // Settings manager backing the current preferences content
+	prefsSizeSaver *prefsSizeSaver  // Persists the preferences window size while it is open
+	trayMu         sync.Mutex
+	trayDebounce   *time.Timer
 }
 
 // OS interface defines methods for transforming the application state
@@ -164,9 +166,8 @@ func getInstance() *SpiceApp {
 				notifiers: []ui.Notifier{func(title, message string) {
 					a.SendNotification(fyne.NewNotification(title, message))
 				}},
-				plugins:  []ui.Plugin{},
-				os:       currentOS,
-				tabItems: make(map[string]*container.TabItem),
+				plugins: []ui.Plugin{},
+				os:      currentOS,
 			}
 			saInstance.appConfig = config.NewAppConfig(saInstance.Preferences())
 			fmt.Fprintln(os.Stderr, "[Spice] getInstance: app config loaded")
@@ -180,15 +181,7 @@ func getInstance() *SpiceApp {
 			i18n.SetLanguage(saInstance.appConfig.GetLanguage())
 
 			// Apply saved theme
-			currentTheme := saInstance.appConfig.GetTheme()
-			switch currentTheme {
-			case "Dark":
-				saInstance.Settings().SetTheme(&forcedVariantTheme{Theme: theme.DefaultTheme(), variant: theme.VariantDark})
-			case "Light":
-				saInstance.Settings().SetTheme(&forcedVariantTheme{Theme: theme.DefaultTheme(), variant: theme.VariantLight})
-			default:
-				saInstance.Settings().SetTheme(&spiceTheme{Theme: theme.DefaultTheme()})
-			}
+			saInstance.Settings().SetTheme(themeForSetting(saInstance.appConfig.GetTheme()))
 			fmt.Fprintln(os.Stderr, "[Spice] getInstance: theme applied")
 
 			saInstance.verifyEULA()
@@ -569,14 +562,12 @@ func (sa *SpiceApp) CreatePreferencesWindow(initialTab string) {
 	monBounds := activeMonitorBounds()
 	sa.os.TransformToForeground()
 
-	// If window already exists, just show it and switch tab if requested
+	// If window already exists, just show it and switch page if requested
 	if sa.prefsWindow != nil {
-		sa.RebuildPreferencesContent(initialTab) // Rebuild to pick up any new pendingAddUrls
-		if initialTab != "" && sa.tabItems != nil {
-			if item, ok := sa.tabItems[initialTab]; ok {
-				sa.prefsTabs.Select(item)
-			}
+		if initialTab == "" && sa.prefsNav != nil {
+			initialTab = sa.prefsNav.CurrentPage()
 		}
+		sa.RebuildPreferencesContent(initialTab) // Rebuild to pick up any new pendingAddUrls
 		centerWindowOnMonitor(sa.prefsWindow, monBounds)
 		sa.prefsWindow.Show()
 		sa.prefsWindow.RequestFocus()
@@ -614,7 +605,8 @@ func (sa *SpiceApp) CreatePreferencesWindow(initialTab string) {
 				ShowNativeFallbackAlert(i18n.T("Graphics Error"), i18n.T("Spice requires OpenGL 2.0+ or hardware acceleration to show windows. The application will continue to run in the background. Please try rebooting your machine to restore graphics functionality."))
 				// Clean up the broken window reference
 				sa.prefsWindow = nil
-				sa.prefsTabs = nil
+				sa.prefsNav = nil
+				sa.prefsSM = nil
 			}
 		}()
 
@@ -626,57 +618,44 @@ func (sa *SpiceApp) CreatePreferencesWindow(initialTab string) {
 		sm := sa.rebuildPreferencesContent(initialTab, true)
 
 		// Fyne is notoriously stubborn about window minimum sizes.
-		// Since UI scales dynamically, we cannot rely on hardcoded logical or physical sizes.
 		// We read the layout engine's absolute Minimum Size for this content:
 		minSize := prefsWindow.Content().MinSize()
 
-		// The user concluded that ~700 logical pixels at 175% Windows scaling was the perfect physical width.
-		// 700 * 1.75 = 1225 physical pixels.
-		// To prevent the window from being "microscopic" when Windows is set to 100% scaling,
-		// we calculate the required Fyne logical width to maintain a ~1225px physical footprint on screen.
-		osScale := sysinfo.GetOSDisplayScale()
-		if osScale <= 0 {
-			osScale = 1.0
-		}
+		// Size in Fyne logical units so the window looks the same on every OS and scale factor:
+		// the user's last size if saved, else 960x680, clamped to 90% of the active monitor and
+		// never below the content's MinSize.
+		targetSize := initialPrefsWindowSize(sa.appConfig, monitorLogicalSize(monBounds), minSize)
 
-		targetWidth := float32(1225) / osScale
-
-		// Protect against Fyne's layout engine crushing the form fields if the text size demands more space.
-		if targetWidth < minSize.Width*1.25 {
-			targetWidth = minSize.Width * 1.25
-		}
-
-		// Derive height from actual screen height so it's always proportional to the display,
-		// regardless of scaling factor. Target 85% of logical screen height.
-		var logicalScreenHeight float32
-		if !monBounds.Empty() && runtime.GOOS == "darwin" {
-			logicalScreenHeight = float32(monBounds.Dy())
-		} else if _, physHeight, err := sysinfo.GetScreenDimensions(); err == nil {
-			logicalScreenHeight = float32(physHeight) / osScale
-		}
-		targetHeight := targetWidth * 1.0 // Default: square (fallback if screen detection fails)
-
-		if logicalScreenHeight > 0 {
-			targetHeight = logicalScreenHeight * 0.85
-
-			// Don't let the window be taller than it is wide
-			if targetHeight > targetWidth {
-				targetHeight = targetWidth
+		// Remember the user's size: debounced while resizing, immediately on close.
+		sizeSaver := newPrefsSizeSaver(sa.appConfig, func() fyne.Size {
+			if c := prefsWindow.Content(); c != nil {
+				return c.MinSize()
 			}
-		}
+			return fyne.Size{}
+		})
+		sa.prefsSizeSaver = sizeSaver
+
 		prefsWindow.SetOnClosed(func() {
+			sizeSaver.flush(prefsWindow.Canvas().Size())
+			sa.prefsSizeSaver = nil
 			sa.os.TransformToBackground()
 			sa.prefsWindow = nil // Clear reference on close
-			sa.prefsTabs = nil   // Clear tabs reference
+			sa.prefsNav = nil
+			sa.prefsSM = nil
+		})
+		// Closing with staged (unsaved) changes asks whether to discard them.
+		prefsWindow.SetCloseIntercept(func() {
+			confirmDiscardOnClose(prefsWindow, sa.prefsSM)
 		})
 
-		// Now that targetWidth and targetHeight are guaranteed to be >= MinSize,
+		// Now that targetSize is guaranteed to be >= MinSize,
 		// we can safely call Resize before Show. This ensures macOS and Wayland
 		// allocate the correct framebuffer size before the first paint, preventing
 		// viewport clipping and the need for manual resizing/refresh hacks.
-		prefsWindow.Resize(fyne.NewSize(targetWidth, targetHeight))
+		prefsWindow.Resize(targetSize)
 		centerWindowOnMonitor(prefsWindow, monBounds)
 		prefsWindow.Show()
+		sizeSaver.start(targetSize)
 
 		// Only now does the window have its real size. A dialog shown earlier would be
 		// permanently clamped by Fyne to the tiny pre-Show canvas (narrow Add Query popup).
@@ -701,12 +680,35 @@ func (sa *SpiceApp) rebuildPreferencesContent(initialTab string, queueDialogs bo
 	}
 
 	sm := NewSettingsManager(sa.prefsWindow)
-	sm.(*SettingsManager).queueDialogs = queueDialogs
+	smi := sm.(*SettingsManager)
+	smi.queueDialogs = queueDialogs
 	sm.RegisterOnSettingsSaved(func() {
 		sa.RebuildTrayMenu()
 	})
 
-	// --- General Tab ---
+	nav, target := sa.buildPreferencesNav(smi, initialTab)
+	sa.prefsNav = newPrefsNavView(smi, nav, target)
+	sa.prefsSM = smi
+
+	// Wrap in a minSizeOverride so Fyne doesn't enforce the full content height
+	// as the window's minimum size. Without this, Fyne silently ignores Resize()
+	// when the content's MinSize exceeds the target.
+	content := newMinSizeContainer(sa.prefsNav.Root())
+	content.onResize = func(size fyne.Size) {
+		if sa.prefsSizeSaver != nil {
+			sa.prefsSizeSaver.observe(size)
+		}
+	}
+	sa.prefsWindow.SetContent(content)
+	sm.GetCheckAndEnableApplyFunc()() // Trigger initial UI dependency refresh
+	return smi
+}
+
+// buildPreferencesNav assembles the App pages and every plugin's pages into one merged
+// navigation, and resolves which page to show first. initialTab may be a page ID, "App", or a
+// plugin ID (whose focused provider page, or its first page, is selected).
+func (sa *SpiceApp) buildPreferencesNav(sm *SettingsManager, initialTab string) (*schema.NavSchema, string) {
+	// --- App pages ---
 	// Theme Selection
 	themeOptions := []string{i18n.T("System"), i18n.T("Dark"), i18n.T("Light")}
 	currentTheme := sa.appConfig.GetTheme()
@@ -731,211 +733,255 @@ func (sa *SpiceApp) rebuildPreferencesContent(initialTab string, queueDialogs bo
 		}
 	}
 
-	generalSchema := schema.PanelSchema{
-		Sections: []schema.SectionSchema{
-			{
-				Title: i18n.T("General Application Settings"),
-				Items: []schema.ItemSchema{
-					schema.ButtonItem{
-						Name:       "manageWindowsStartup",
-						Label:      i18n.T("Start with Windows:"),
-						Help:       i18n.T("Spice registers itself to start with Windows. Click to open Windows Settings to enable or disable this feature."),
-						ButtonText: i18n.T("Manage in Windows Settings"),
-						OnPressed: func() {
-							u, _ := url.Parse("ms-settings:startupapps")
-							if u != nil {
-								_ = sa.OpenURL(u)
-							}
+	appNav := &schema.NavSchema{
+		Groups: []schema.NavGroup{{
+			ID:    schema.NavGroupGeneral,
+			Title: i18n.T("General"),
+			Order: 10,
+			Items: []schema.NavItem{
+				{
+					ID:          schema.NavPageApp,
+					Title:       i18n.T("App"),
+					Description: i18n.T("Startup, appearance and notifications."),
+					IconName:    "settings",
+					Order:       10,
+					Panel: &schema.PanelSchema{Sections: []schema.SectionSchema{
+						{
+							Title: i18n.T("Startup"),
+							Items: []schema.ItemSchema{
+								schema.ButtonItem{
+									Name:       "manageWindowsStartup",
+									Label:      i18n.T("Start with Windows:"),
+									Help:       i18n.T("Spice registers itself to start with Windows. Click to open Windows Settings to enable or disable this feature."),
+									ButtonText: i18n.T("Manage in Windows Settings"),
+									OnPressed: func() {
+										u, _ := url.Parse("ms-settings:startupapps")
+										if u != nil {
+											_ = sa.OpenURL(u)
+										}
+									},
+									VisibleIf: func() bool {
+										return runtime.GOOS == "windows"
+									},
+								},
+								schema.ButtonItem{
+									Name:       "manageMacStartup",
+									Label:      i18n.T("Start at Login:"),
+									Help:       i18n.T("Click to open macOS System Settings to add or remove Spice from your Login Items."),
+									ButtonText: i18n.T("Manage in macOS Settings"),
+									OnPressed: func() {
+										_ = exec.Command("open", "x-apple.systempreferences:com.apple.LoginItems-Settings.extension").Start()
+									},
+									VisibleIf: func() bool {
+										return runtime.GOOS == "darwin"
+									},
+								},
+							},
 						},
-						VisibleIf: func() bool {
-							return runtime.GOOS == "windows"
-						},
-					},
-					schema.ButtonItem{
-						Name:       "manageMacStartup",
-						Label:      i18n.T("Start at Login:"),
-						Help:       i18n.T("Click to open macOS System Settings to add or remove Spice from your Login Items."),
-						ButtonText: i18n.T("Manage in macOS Settings"),
-						OnPressed: func() {
-							_ = exec.Command("open", "x-apple.systempreferences:com.apple.LoginItems-Settings.extension").Start()
-						},
-						VisibleIf: func() bool {
-							return runtime.GOOS == "darwin"
-						},
-					},
-					schema.BoolItem{
-						Name:         "enableNotifications",
-						InitialValue: sa.appConfig.GetAppNotificationsEnabled(),
-						Label:        i18n.T("Enable System Notifications:"),
-						Help:         i18n.T("Enable or disable system notifications from Spice."),
-						ApplyFunc: func(b bool) {
-							sa.appConfig.SetAppNotificationsEnabled(b)
-						},
-					},
-					schema.BoolItem{
-						Name:         "enableUpdateCheck",
-						InitialValue: sa.appConfig.GetUpdateCheckEnabled(),
-						Label:        i18n.T("Enable New Version Check:"),
-						Help:         i18n.T("Automatically check for new versions of Spice on startup."),
-						ApplyFunc: func(b bool) {
-							sa.appConfig.SetUpdateCheckEnabled(b)
-						},
-						VisibleIf: func() bool { return !config.IsStoreDistribution() },
-					},
-					schema.BoolItem{
-						Name:         "enableShortcuts",
-						InitialValue: !wallpaper.GetInstance().GetShortcutsDisabled(),
-						Label:        i18n.T("Enable global shortcuts:"),
-						Help:         i18n.T("Use keyboard shortcuts to control wallpapers. Disable if they conflict with other apps."),
-						ApplyFunc: func(val bool) {
-							wallpaper.GetInstance().SetShortcutsDisabled(!val)
-							hotkey.StartListeners(GetPluginManager())
-						},
-					},
-					schema.BoolItem{
-						Name:         "enableTargetedShortcuts",
-						InitialValue: !wallpaper.GetInstance().GetTargetedShortcutsDisabled(),
-						Label:        i18n.T("Enable Display Specific Shortcuts (Alt + Arrow + 1-9):"),
-						Help:         i18n.T("Disable this if Alt+Arrow conflicts with your browser or other apps."),
-						ApplyFunc: func(val bool) {
-							wallpaper.GetInstance().SetTargetedShortcutsDisabled(!val)
-							hotkey.StartListeners(GetPluginManager())
-						},
-						EnabledIf: func() bool {
-							val := sm.GetValue("enableShortcuts")
-							if val == nil {
-								return true
-							}
-							return val.(bool)
-						},
-					},
-					schema.HyperlinkItem{
-						ID:   "shortcutsLink",
-						Text: i18n.T("View all shortcuts →"),
-						URL:  "https://github.com/dixieflatline76/Spice/blob/main/docs/user_guide.md#keyboard-shortcuts",
-					},
-					schema.SelectItem{
-						Name:         "theme",
-						Options:      themeOptions,
-						InitialValue: initialThemeIndex,
-						Label:        i18n.T("Theme:"),
-						Help:         i18n.T("Select the application theme."),
-						ApplyFunc: func(val interface{}) {
-							selectedIndex := val.(int)
-							if selectedIndex < 0 || selectedIndex >= len(themeOptions) {
-								return
-							}
-							selectedTheme := themeOptions[selectedIndex]
-							sa.appConfig.SetTheme(selectedTheme)
+						{
+							Title: i18n.T("Appearance"),
+							Items: []schema.ItemSchema{
+								schema.SelectItem{
+									Name:         "theme",
+									Options:      themeOptions,
+									InitialValue: initialThemeIndex,
+									Label:        i18n.T("Theme:"),
+									Help:         i18n.T("Select the application theme."),
+									ApplyFunc: func(val interface{}) {
+										selectedIndex := val.(int)
+										if selectedIndex < 0 || selectedIndex >= len(themeOptions) {
+											return
+										}
+										selectedTheme := themeOptions[selectedIndex]
+										sa.appConfig.SetTheme(selectedTheme)
 
-							switch selectedTheme {
-							case "Dark":
-								sa.Settings().SetTheme(&forcedVariantTheme{Theme: theme.DefaultTheme(), variant: theme.VariantDark})
-							case "Light":
-								sa.Settings().SetTheme(&forcedVariantTheme{Theme: theme.DefaultTheme(), variant: theme.VariantLight})
-							default:
-								sa.Settings().SetTheme(&spiceTheme{Theme: theme.DefaultTheme()})
-							}
-						},
-					},
-					schema.SelectItem{
-						Name:         "language",
-						Options:      langDisplayOptions,
-						InitialValue: initialLangIndex,
-						Label:        i18n.T("Language:"),
-						Help:         i18n.T("Select the application language. Restart may be required for full effect."),
-						NeedsRefresh: true,
-						ApplyFunc: func(val interface{}) {
-							selectedIndex := val.(int)
-							if selectedIndex < 0 || selectedIndex >= len(langOptions) {
-								return
-							}
-							selectedLang := langOptions[selectedIndex]
-							sa.appConfig.SetLanguage(selectedLang)
-							i18n.SetLanguage(selectedLang)
+										sa.Settings().SetTheme(themeForSetting(selectedTheme))
+									},
+								},
+								schema.SelectItem{
+									Name:         "language",
+									Options:      langDisplayOptions,
+									InitialValue: initialLangIndex,
+									Label:        i18n.T("Language:"),
+									Help:         i18n.T("Select the application language. Restart may be required for full effect."),
+									NeedsRefresh: true,
+									ApplyFunc: func(val interface{}) {
+										selectedIndex := val.(int)
+										if selectedIndex < 0 || selectedIndex >= len(langOptions) {
+											return
+										}
+										selectedLang := langOptions[selectedIndex]
+										sa.appConfig.SetLanguage(selectedLang)
+										i18n.SetLanguage(selectedLang)
 
-							if srv := api.GetServer(); srv != nil {
-								if err := srv.BroadcastLanguage(i18n.GetLanguage()); err != nil {
-									utilLog.Printf("Failed to broadcast language change to extensions: %v", err)
-								}
-							}
+										if srv := api.GetServer(); srv != nil {
+											if err := srv.BroadcastLanguage(i18n.GetLanguage()); err != nil {
+												utilLog.Printf("Failed to broadcast language change to extensions: %v", err)
+											}
+										}
 
-							activeID := "App"
-							selected := sa.prefsTabs.Selected()
-							for id, item := range sa.tabItems {
-								if item == selected {
-									activeID = id
-									break
-								}
-							}
-							sa.RebuildPreferencesContent(activeID)
-							sa.RebuildTrayMenu()
+										activeID := schema.NavPageApp
+										if sa.prefsNav != nil {
+											activeID = sa.prefsNav.CurrentPage()
+										}
+										sa.RebuildPreferencesContent(activeID)
+										sa.RebuildTrayMenu()
+									},
+								},
+							},
 						},
-					},
-					schema.BoolItem{
-						Name:         "enableDebugLogging",
-						InitialValue: sa.appConfig.GetDebugLoggingEnabled(),
-						Label:        i18n.T("Enable Debug Logging:"),
-						Help:         i18n.T("Write verbose debug entries to the log file. Useful for troubleshooting."),
-						ApplyFunc: func(b bool) {
-							sa.appConfig.SetDebugLoggingEnabled(b)
-							utilLog.SetDebugEnabled(b)
+						{
+							Title: i18n.T("Notifications and updates"),
+							Items: []schema.ItemSchema{
+								schema.BoolItem{
+									Name:         "enableNotifications",
+									InitialValue: sa.appConfig.GetAppNotificationsEnabled(),
+									Label:        i18n.T("Enable System Notifications:"),
+									Help:         i18n.T("Enable or disable system notifications from Spice."),
+									ApplyFunc: func(b bool) {
+										sa.appConfig.SetAppNotificationsEnabled(b)
+									},
+								},
+								schema.BoolItem{
+									Name:         "enableUpdateCheck",
+									InitialValue: sa.appConfig.GetUpdateCheckEnabled(),
+									Label:        i18n.T("Enable New Version Check:"),
+									Help:         i18n.T("Automatically check for new versions of Spice on startup."),
+									ApplyFunc: func(b bool) {
+										sa.appConfig.SetUpdateCheckEnabled(b)
+									},
+									VisibleIf: func() bool { return !config.IsStoreDistribution() },
+								},
+							},
 						},
-					},
+					}},
+				},
+				{
+					ID:          schema.NavPageShortcuts,
+					Title:       i18n.T("Shortcuts"),
+					Description: i18n.T("Keyboard shortcuts for controlling wallpapers."),
+					IconName:    "keyboard",
+					Order:       20,
+					Panel: &schema.PanelSchema{Sections: []schema.SectionSchema{
+						{
+							Title: i18n.T("Keyboard"),
+							Items: []schema.ItemSchema{
+								schema.BoolItem{
+									Name:         "enableShortcuts",
+									InitialValue: !wallpaper.GetInstance().GetShortcutsDisabled(),
+									Label:        i18n.T("Enable global shortcuts:"),
+									Help:         i18n.T("Use keyboard shortcuts to control wallpapers. Disable if they conflict with other apps."),
+									ApplyFunc: func(val bool) {
+										wallpaper.GetInstance().SetShortcutsDisabled(!val)
+										hotkey.StartListeners(GetPluginManager())
+									},
+								},
+								schema.BoolItem{
+									Name:         "enableTargetedShortcuts",
+									InitialValue: !wallpaper.GetInstance().GetTargetedShortcutsDisabled(),
+									Label:        i18n.T("Enable Display Specific Shortcuts (Alt + Arrow + 1-9):"),
+									Help:         i18n.T("Disable this if Alt+Arrow conflicts with your browser or other apps."),
+									ApplyFunc: func(val bool) {
+										wallpaper.GetInstance().SetTargetedShortcutsDisabled(!val)
+										hotkey.StartListeners(GetPluginManager())
+									},
+									EnabledIf: func() bool {
+										val := sm.GetValue("enableShortcuts")
+										if val == nil {
+											return true
+										}
+										return val.(bool)
+									},
+								},
+								schema.HyperlinkItem{
+									ID:   "shortcutsLink",
+									Text: i18n.T("View all shortcuts →"),
+									URL:  "https://github.com/dixieflatline76/Spice/blob/main/docs/user_guide.md#keyboard-shortcuts",
+								},
+							},
+						},
+					}},
+				},
+				{
+					ID:       schema.NavPageAdvanced,
+					Title:    i18n.T("Advanced"),
+					IconName: "advanced",
+					Order:    80,
+					Panel: &schema.PanelSchema{Sections: []schema.SectionSchema{
+						{
+							Title: i18n.T("Diagnostics"),
+							Items: []schema.ItemSchema{
+								schema.BoolItem{
+									Name:         "enableDebugLogging",
+									InitialValue: sa.appConfig.GetDebugLoggingEnabled(),
+									Label:        i18n.T("Enable Debug Logging:"),
+									Help:         i18n.T("Write verbose debug entries to the log file. Useful for troubleshooting."),
+									ApplyFunc: func(b bool) {
+										sa.appConfig.SetDebugLoggingEnabled(b)
+										utilLog.SetDebugEnabled(b)
+									},
+								},
+							},
+						},
+					}},
 				},
 			},
-		},
+		}},
 	}
 
-	generalContainer := sm.RenderSchema(generalSchema)
-
-	// Initialize/Reset tab mapping
-	sa.tabItems = make(map[string]*container.TabItem)
-
-	generalTabItem := container.NewTabItem(i18n.T("App"), generalContainer)
-	sa.tabItems["App"] = generalTabItem
-
-	// --- Plugin Tabs ---
-	var pluginTabItems []*container.TabItem
+	// --- Plugin pages (merged by page ID) ---
+	navs := []*schema.NavSchema{appNav}
+	target := initialTab
 	for _, plugin := range sa.plugins {
-		// Create a tab for each plugin
-		prefsSchema := plugin.CreatePrefsSchema(sm)
-		if prefsSchema != nil {
-			pluginContainer := sm.RenderTabs(*prefsSchema)
-			item := container.NewTabItem(plugin.Name(), pluginContainer)
-			sa.tabItems[plugin.ID()] = item
-			pluginTabItems = append(pluginTabItems, item)
+		pluginNav := plugin.CreatePrefsSchema(sm)
+		if pluginNav == nil {
+			continue
+		}
+		navs = append(navs, pluginNav)
+		if pluginNav.Selected != "" {
+			target = pluginNav.Selected // a focused provider / pending URL wins
+		} else if initialTab == plugin.ID() {
+			target = firstPluginPage(pluginNav)
 		}
 	}
-
-	// Combine all tabs
-	tabs := container.NewAppTabs(generalTabItem)
-	sa.prefsTabs = tabs // Store reference for dynamic switching
-	for _, item := range pluginTabItems {
-		tabs.Append(item)
+	nav := schema.MergeNav(navs...)
+	nav.Selected = ""
+	if target == "" || target == "App" {
+		target = schema.NavPageApp
 	}
+	return nav, target
+}
 
-	// Select the initial tab if specified
-	if initialTab != "" {
-		if item, ok := sa.tabItems[initialTab]; ok {
-			tabs.Select(item)
+// firstPluginPage returns a plugin's lowest-ordered page in its lowest-ordered group.
+func firstPluginPage(n *schema.NavSchema) string {
+	best, bestGroup, bestItem := "", 0, 0
+	for _, g := range n.Groups {
+		for _, it := range g.Items {
+			if best == "" || g.Order < bestGroup || (g.Order == bestGroup && it.Order < bestItem) {
+				best, bestGroup, bestItem = it.ID, g.Order, it.Order
+			}
 		}
 	}
+	return best
+}
 
-	closeButton := widget.NewButton(i18n.T("Close"), func() {
-		sa.prefsWindow.Close()
-	})
-
-	// Layout: Tabs take up the main space, Apply/Close buttons at the bottom
-	prefsWindowLayout := container.NewBorder(nil, container.NewVBox(sm.GetApplySettingsButton(), container.NewHBox(layout.NewSpacer(), closeButton)), nil, nil, tabs)
-
-	// Wrap in a minSizeOverride so Fyne doesn't enforce the full content height
-	// as the window's minimum size. Without this, Fyne silently ignores Resize()
-	// when the content's MinSize exceeds the target (e.g., accordion panels at 1352px
-	// on a 1440px screen at 100% scaling).
-	sa.prefsWindow.SetContent(newMinSizeContainer(prefsWindowLayout))
-	sm.GetCheckAndEnableApplyFunc()() // Trigger initial UI dependency refresh
-	return sm.(*SettingsManager)
+// confirmDiscardOnClose closes the preferences window, asking first when changes are staged.
+func confirmDiscardOnClose(w fyne.Window, sm *SettingsManager) {
+	if sm == nil || !sm.IsDirty() {
+		w.Close()
+		return
+	}
+	d := dialog.NewConfirm(
+		i18n.T("Discard unsaved changes?"),
+		i18n.T("You have unsaved changes. Close the window and discard them?"),
+		func(discard bool) {
+			if discard {
+				w.Close()
+			}
+		}, w)
+	d.SetConfirmText(i18n.T("Discard"))
+	d.SetDismissText(i18n.T("Keep editing"))
+	d.Show()
 }
 
 // minSizeContainer wraps a CanvasObject and overrides its MinSize to prevent
@@ -943,7 +989,8 @@ func (sa *SpiceApp) rebuildPreferencesContent(initialTab string, queueDialogs bo
 // The child is still laid out at the full available size.
 type minSizeContainer struct {
 	widget.BaseWidget
-	content fyne.CanvasObject
+	content  fyne.CanvasObject
+	onResize func(fyne.Size) // optional: notified with the window content size on every layout
 }
 
 func newMinSizeContainer(content fyne.CanvasObject) *minSizeContainer {
@@ -953,16 +1000,20 @@ func newMinSizeContainer(content fyne.CanvasObject) *minSizeContainer {
 }
 
 func (m *minSizeContainer) CreateRenderer() fyne.WidgetRenderer {
-	return &minSizeRenderer{content: m.content}
+	return &minSizeRenderer{owner: m, content: m.content}
 }
 
 type minSizeRenderer struct {
+	owner   *minSizeContainer
 	content fyne.CanvasObject
 }
 
 func (r *minSizeRenderer) Layout(size fyne.Size) {
 	r.content.Resize(size)
 	r.content.Move(fyne.NewPos(0, 0))
+	if r.owner != nil && r.owner.onResize != nil {
+		r.owner.onResize(size)
+	}
 }
 
 func (r *minSizeRenderer) MinSize() fyne.Size {
@@ -980,31 +1031,6 @@ func (r *minSizeRenderer) Objects() []fyne.CanvasObject {
 }
 
 func (r *minSizeRenderer) Destroy() {}
-
-// spiceTheme wraps any Fyne theme to apply the Spice brand accent color.
-type spiceTheme struct {
-	fyne.Theme
-}
-
-func (t *spiceTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
-	if name == theme.ColorNamePrimary {
-		return color.NRGBA{R: 0xFF, G: 0x98, B: 0x00, A: 255} // Spice warm amber
-	}
-	return t.Theme.Color(name, variant)
-}
-
-// forcedVariantTheme forces a specific variant (Dark or Light) and applies the Spice accent.
-type forcedVariantTheme struct {
-	fyne.Theme
-	variant fyne.ThemeVariant
-}
-
-func (t *forcedVariantTheme) Color(name fyne.ThemeColorName, _ fyne.ThemeVariant) color.Color {
-	if name == theme.ColorNamePrimary {
-		return color.NRGBA{R: 0xFF, G: 0x98, B: 0x00, A: 255} // Spice warm amber
-	}
-	return t.Theme.Color(name, t.variant)
-}
 
 // Start activates all plugins and runs the Fyne application
 func (sa *SpiceApp) Start() {
@@ -1322,8 +1348,8 @@ func (sa *SpiceApp) CreateAboutSplash() {
 func anchorIsDarkTheme() bool {
 	settings := fyne.CurrentApp().Settings()
 	// Check if Spice has forced a specific theme variant
-	if ft, ok := settings.Theme().(*forcedVariantTheme); ok {
-		return ft.variant == theme.VariantDark
+	if forced, dark := isForcedDark(settings.Theme()); forced {
+		return dark
 	}
 	// Fall back to system theme
 	return settings.ThemeVariant() == theme.VariantDark

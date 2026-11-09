@@ -174,12 +174,12 @@ func (m *mockGatePluginManager) CreateToggleMenuItem(string, func(bool), string,
 
 func (m *mockGatePluginManager) OpenURL(*url.URL) error { return nil }
 
-func (m *mockGatePluginManager) OpenPreferences(string)            {}
-func (m *mockGatePluginManager) GetPreferences() fyne.Preferences  { return nil }
-func (m *mockGatePluginManager) GetAssetManager() *asset.Manager   { return nil }
-func (m *mockGatePluginManager) RefreshTrayMenu()                  {}
-func (m *mockGatePluginManager) RebuildTrayMenu()                  {}
-func (m *mockGatePluginManager) RebuildTrayMenuImmediate()         {}
+func (m *mockGatePluginManager) OpenPreferences(string)           {}
+func (m *mockGatePluginManager) GetPreferences() fyne.Preferences { return nil }
+func (m *mockGatePluginManager) GetAssetManager() *asset.Manager  { return nil }
+func (m *mockGatePluginManager) RefreshTrayMenu()                 {}
+func (m *mockGatePluginManager) RebuildTrayMenu()                 {}
+func (m *mockGatePluginManager) RebuildTrayMenuImmediate()        {}
 func (m *mockGatePluginManager) ShowTuneImagePopup(int, string, image.Rectangle, provider.TuningOptions, provider.TuningOptions, [9]string, [9]provider.CropAnchor, bool, func(provider.TuningOptions, func()), func()) {
 }
 
@@ -590,7 +590,7 @@ func TestGate_GpuBackgroundPIDIgnored(t *testing.T) {
 	wp, _ := newTestGatePlugin(t, 1)
 	det := &fakeGateDetector{}
 	det.setBusy(activity.BusyNone)
-	det.setForegroundPID(1234)                   // Foreground is PID 1234 (0% GPU)
+	det.setForegroundPID(1234)                    // Foreground is PID 1234 (0% GPU)
 	det.setGpu(map[int]float64{9999: 95.0}, true) // Background PID 9999 has 95% GPU
 
 	gate := NewActivityGate(wp, det)
@@ -667,17 +667,17 @@ func TestUI_ActivityGateTrayAndAccordionIcons(t *testing.T) {
 		t.Error("CreateTrayMenu must show 'Resume Play' when gateSuppressed is true")
 	}
 
-	// 2. Accordion icon for "Activity & Power" (index 4) must be "pause" and "Actions" (index 5) must be "refresh"
+	// 2. Sidebar icons: the "Pause and power" page uses "pause" and "Displays" uses "computer"
 	builder := NewPrefsPanelBuilder(wp, nil)
-	acc := builder.BuildGeneralTabAccordion()
-	if len(acc.Items) < 6 {
-		t.Fatalf("expected 6 accordion sections, got %d", len(acc.Items))
+	icons := map[string]string{}
+	for _, page := range builder.BuildGeneralPages() {
+		icons[page.ID] = page.IconName
 	}
-	if acc.Items[4].IconName != "pause" {
-		t.Errorf("section 4 (%s) icon = %q, want \"pause\"", acc.Items[4].Title, acc.Items[4].IconName)
+	if icons[schema.NavPagePause] != "pause" {
+		t.Errorf("pause page icon = %q, want \"pause\"", icons[schema.NavPagePause])
 	}
-	if acc.Items[5].IconName != "refresh" {
-		t.Errorf("section 5 (%s) icon = %q, want \"refresh\"", acc.Items[5].Title, acc.Items[5].IconName)
+	if icons[schema.NavPageDisplays] != "computer" {
+		t.Errorf("displays page icon = %q, want \"computer\"", icons[schema.NavPageDisplays])
 	}
 
 	// 3. gateGraceMinutes validator check
@@ -875,4 +875,3 @@ func TestScheduler_NightlyRefreshDeferredWhenGateSuppressed(t *testing.T) {
 		t.Fatalf("expected checkAndRunRefresh to return -1 (deferred), got %d", result)
 	}
 }
-

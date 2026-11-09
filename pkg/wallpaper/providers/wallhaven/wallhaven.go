@@ -494,14 +494,11 @@ func (p *Provider) CreateSettingsPanel(sm setting.SettingsManager) *schema.Panel
 	}
 
 	return &schema.PanelSchema{
+		Description: i18n.T("wallhaven is a repository for high-quality, high-resolution wallpapers."),
 		Sections: []schema.SectionSchema{
 			{
-				Title: i18n.T("wallhaven"),
+				Title: i18n.T("Account"),
 				Items: []schema.ItemSchema{
-					schema.LabelItem{
-						Text:       i18n.T("wallhaven is a repository for high-quality, high-resolution wallpapers."),
-						Importance: schema.ImportanceLow,
-					},
 					schema.SecretItem{
 						Name:         apiKeyIdent,
 						Label:        i18n.T("wallhaven API Key:"),
@@ -593,6 +590,11 @@ func (p *Provider) CreateSettingsPanel(sm setting.SettingsManager) *schema.Panel
 							}
 						},
 					},
+				},
+			},
+			{
+				Title: i18n.T("Sync"),
+				Items: []schema.ItemSchema{
 					schema.BoolItem{
 						Name:         syncIdent,
 						Label:        i18n.T("Keep Favorites (collections) Synced:"),
@@ -662,14 +664,6 @@ func (p *Provider) CreateQueryPanel(sm setting.SettingsManager, pendingUrl strin
 				Title:       i18n.T("wallhaven Queries and Collections (Favorites)"),
 				Description: i18n.T("Manage your wallhaven.cc image queries and collections here. Paste your image search or collection URL and Spice will take care of the rest."),
 				Items: []schema.ItemSchema{
-					schema.ButtonItem{
-						Name:       "wallhaven_add",
-						ButtonText: i18n.T("Add New Collection"),
-						IconName:   "add",
-						OnPressed: func() {
-							sm.ShowAddQueryDialog(addCfg, "", "", sm.RefreshUI)
-						},
-					},
 					schema.QueryListItem{
 						GetQueries: func() []schema.Query {
 							queries := p.cfg.GetQueries()
@@ -694,6 +688,14 @@ func (p *Provider) CreateQueryPanel(sm setting.SettingsManager, pendingUrl strin
 							return p.getDisplayURL(q)
 						},
 						EditConfig: &editCfg,
+					},
+					schema.ButtonItem{
+						Name:       "wallhaven_add",
+						ButtonText: i18n.T("Add New Collection"),
+						IconName:   "add",
+						OnPressed: func() {
+							sm.ShowAddQueryDialog(addCfg, "", "", sm.RefreshUI)
+						},
 					},
 				},
 			},

@@ -637,7 +637,7 @@ func TestGeneralTab_StorageSettingsItems(t *testing.T) {
 	panel := NewPrefsPanelBuilder(wp, nil).BuildGeneralTabSchema()
 	var items []schema.ItemSchema
 	for _, sec := range panel.Sections {
-		if sec.Title == "Wallpaper Cycle & Cache" {
+		if sec.ID == "storage" {
 			items = sec.Items
 		}
 	}

@@ -7,13 +7,13 @@ import (
 
 // Plugin is the interface that must be implemented by all plugins.
 type Plugin interface {
-	ID() string                                                   // ID returns a stable, non-localized provider ID.
-	Name() string                                                 // Name returns the localized provider name.
-	Activate()                                                    // Called to activate the plugin.
-	Deactivate()                                                  // Called to deactivate the plugin.
-	CreateTrayMenu() *schema.MenuSchema                           // Returns menu items to add to the tray.
-	CreatePrefsSchema(setting.SettingsManager) *schema.TabsSchema // Returns declarative preferences tabs.
-	Init(PluginManager)                                           // Injects the preferences.
+	ID() string                                                  // ID returns a stable, non-localized provider ID.
+	Name() string                                                // Name returns the localized provider name.
+	Activate()                                                   // Called to activate the plugin.
+	Deactivate()                                                 // Called to deactivate the plugin.
+	CreateTrayMenu() *schema.MenuSchema                          // Returns menu items to add to the tray.
+	CreatePrefsSchema(setting.SettingsManager) *schema.NavSchema // Returns declarative preferences pages (merged by page ID).
+	Init(PluginManager)                                          // Injects the preferences.
 }
 
 // Notifier is a function that notifies the user.

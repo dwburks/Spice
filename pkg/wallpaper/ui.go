@@ -1,6 +1,7 @@
 package wallpaper
 
 import (
+	"os"
 	"sort"
 
 	"github.com/dixieflatline76/Spice/v2/pkg/i18n"
@@ -357,12 +358,53 @@ func (wp *Plugin) createAllDisplaysItems(firstPaused bool) []schema.MenuItemSche
 	return res
 }
 
-// CreatePrefsSchema creates a declarative preferences tabs schema for wallpaper settings.
-func (wp *Plugin) CreatePrefsSchema(sm setting.SettingsManager) *schema.TabsSchema {
+// CreatePrefsSchema creates the declarative preferences pages for wallpaper settings.
+func (wp *Plugin) CreatePrefsSchema(sm setting.SettingsManager) *schema.NavSchema {
 	builder := NewPrefsPanelBuilder(wp, sm)
 
 	// Register the wallpaper refresh function
 	sm.RegisterRefreshFunc(wp.RefreshImagesAndPulse)
 
-	return builder.BuildPrefsTabsSchema()
+	return builder.BuildNavSchema()
+}
+
+// PrimaryWallpaperBanner snapshots the wallpaper currently shown on the primary display (monitor 0,
+// or the lowest-numbered monitor if there is no monitor 0) for the preferences banner. The data is
+// copied under wp.monMu -> mc.mu read locks and both are released before returning, so the UI
+// adapter receives plain values and never reaches back into the plugin (one-way port data flow).
+// Returns nil when nothing is showing yet or the file is gone.
+func (wp *Plugin) PrimaryWallpaperBanner() *schema.BannerData {
+	var path, providerID string
+
+	wp.monMu.RLock()
+	var mc *MonitorController
+	if m, ok := wp.Monitors[0]; ok {
+		mc = m
+	} else {
+		lowest := -1
+		for id, m := range wp.Monitors {
+			if lowest == -1 || id < lowest {
+				lowest = id
+				mc = m
+			}
+		}
+	}
+	if mc != nil {
+		mc.mu.RLock()
+		if mc.State != nil {
+			path = mc.State.CurrentImage.FilePath
+			providerID = mc.State.CurrentImage.Provider
+		}
+		mc.mu.RUnlock()
+	}
+	wp.monMu.RUnlock()
+	// ── locks released ──
+
+	if path == "" {
+		return nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		return nil
+	}
+	return &schema.BannerData{ImagePath: path, ProviderName: wp.GetProviderTitle(providerID)}
 }

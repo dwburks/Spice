@@ -12,7 +12,7 @@ import (
 	"github.com/dixieflatline76/Spice/v2/util/log"
 )
 
-//go:embed images/* icons/* text/* models/*
+//go:embed images/* icons/* text/* models/* fonts/*
 var assets embed.FS
 
 // Manager manages the loading of UI assets.
@@ -78,4 +78,14 @@ func (am *Manager) GetModel(name string) ([]byte, error) {
 		return nil, err
 	}
 	return modelData, nil
+}
+
+// GetFont loads and returns the raw bytes of an embedded font asset by name (e.g. "Inter-Regular.ttf").
+func (am *Manager) GetFont(name string) ([]byte, error) {
+	fontData, err := assets.ReadFile("fonts/" + name)
+	if err != nil {
+		log.Println("Error loading font:", err)
+		return nil, err
+	}
+	return fontData, nil
 }

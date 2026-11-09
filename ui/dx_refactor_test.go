@@ -414,16 +414,16 @@ func TestSchemaRendering(t *testing.T) {
 	scroll, ok := rendered.(*container.Scroll)
 	assert.True(t, ok, "Rendered output should be a VScroll container")
 	mainBox, ok := scroll.Content.(*fyne.Container)
-	assert.True(t, ok, "VScroll content should be a VBox container")
-	assert.Equal(t, 2, len(mainBox.Objects), "VBox should have 2 sections")
+	assert.True(t, ok, "VScroll content should be a column container")
+	assert.Equal(t, 2, len(mainBox.Objects), "column should hold one block per section")
 
 	// Check registry: The RenderSchema should have registered the widgets
 	assert.NotNil(t, sm.(*SettingsManager).allWidgets["enableNotifications"])
 	assert.NotNil(t, sm.(*SettingsManager).allWidgets["username"])
 	assert.NotNil(t, sm.(*SettingsManager).allWidgets["resetDatabase"])
 
-	// Check widget types
-	check := sm.(*SettingsManager).allWidgets["enableNotifications"].(*widget.Check)
+	// Check widget types: BoolItems render as the custom on/off switch
+	check := sm.(*SettingsManager).allWidgets["enableNotifications"].(*Switch)
 	assert.True(t, check.Checked)
 
 	entry := sm.(*SettingsManager).allWidgets["username"].(*widget.Entry)

@@ -34,7 +34,10 @@ const (
 
 // PanelSchema is the root of the declarative UI definition.
 type PanelSchema struct {
-	Sections []SectionSchema
+	// Description is an optional one-line summary of the whole panel. When the panel is a
+	// preferences page, the adapter shows it in the page header (if the page has none of its own).
+	Description string
+	Sections    []SectionSchema
 }
 
 // SectionSchema represents a logical grouping of settings.
@@ -327,48 +330,6 @@ type SecretItem struct {
 }
 
 func (SecretItem) isItemSchema() {}
-
-// TabLocation defines where tabs are positioned.
-type TabLocation string
-
-const (
-	TabLocationTop      TabLocation = "top"
-	TabLocationLeading  TabLocation = "leading"
-	TabLocationBottom   TabLocation = "bottom"
-	TabLocationTrailing TabLocation = "trailing"
-)
-
-// TabsSchema represents a tabbed navigation container (e.g. Preferences window tabs).
-type TabsSchema struct {
-	Items    []TabItemSchema
-	Selected int
-	Location TabLocation
-}
-
-// TabItemSchema represents an individual tab.
-type TabItemSchema struct {
-	Title     string
-	IconName  string
-	IconBytes []byte
-	Panel     *PanelSchema
-	Accordion *AccordionSchema
-}
-
-// AccordionSchema represents a set of collapsible accordion items.
-type AccordionSchema struct {
-	Items        []AccordionItemSchema
-	EmptyMessage string
-}
-
-// AccordionItemSchema represents a collapsible section with dynamic headers.
-type AccordionItemSchema struct {
-	Title     string
-	TitleFunc func() string // Optional dynamic title evaluator (e.g. for reactive item counts)
-	IconName  string
-	IconBytes []byte
-	Open      bool
-	Content   *PanelSchema
-}
 
 // MenuSchema represents a context or tray menu.
 type MenuSchema struct {

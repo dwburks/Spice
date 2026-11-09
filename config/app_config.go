@@ -77,3 +77,21 @@ func (c *AppConfig) GetLanguage() string {
 func (c *AppConfig) SetLanguage(lang string) {
 	c.prefs.SetString(AppLanguageKey, lang)
 }
+
+// PrefsWindowWidthKey and PrefsWindowHeightKey store the Preferences window's last size in Fyne
+// logical units (purely UI state; 0 or missing means "use the default size").
+const (
+	PrefsWindowWidthKey  = "prefs_window_width"
+	PrefsWindowHeightKey = "prefs_window_height"
+)
+
+// GetPrefsWindowSize returns the saved Preferences window size (0, 0 when never saved).
+func (c *AppConfig) GetPrefsWindowSize() (width, height float64) {
+	return c.prefs.FloatWithFallback(PrefsWindowWidthKey, 0), c.prefs.FloatWithFallback(PrefsWindowHeightKey, 0)
+}
+
+// SetPrefsWindowSize saves the Preferences window size.
+func (c *AppConfig) SetPrefsWindowSize(width, height float64) {
+	c.prefs.SetFloat(PrefsWindowWidthKey, width)
+	c.prefs.SetFloat(PrefsWindowHeightKey, height)
+}

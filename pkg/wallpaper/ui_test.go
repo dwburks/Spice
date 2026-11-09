@@ -254,25 +254,20 @@ func (m *MockSettingsManager) RenderSchema(panel schema.PanelSchema) fyne.Canvas
 	return box
 }
 
-func (m *MockSettingsManager) RenderTabs(tabs schema.TabsSchema) fyne.CanvasObject {
+// RenderNav renders every page (and drill-in child page) of a navigation schema.
+func (m *MockSettingsManager) RenderNav(nav *schema.NavSchema) fyne.CanvasObject {
 	box := container.NewVBox()
-	for _, item := range tabs.Items {
-		if item.Accordion != nil {
-			box.Add(m.RenderAccordion(*item.Accordion))
-		}
-		if item.Panel != nil {
-			box.Add(m.RenderSchema(*item.Panel))
+	var render func(items []schema.NavItem)
+	render = func(items []schema.NavItem) {
+		for _, item := range items {
+			if item.Panel != nil {
+				box.Add(m.RenderSchema(*item.Panel))
+			}
+			render(item.Children)
 		}
 	}
-	return box
-}
-
-func (m *MockSettingsManager) RenderAccordion(acc schema.AccordionSchema) fyne.CanvasObject {
-	box := container.NewVBox()
-	for _, item := range acc.Items {
-		if item.Content != nil {
-			box.Add(m.RenderSchema(*item.Content))
-		}
+	for _, g := range nav.Groups {
+		render(g.Items)
 	}
 	return box
 }
@@ -317,8 +312,8 @@ func TestSmartFitEnablesFaceOptions(t *testing.T) {
 	sm := NewMockSettingsManager()
 
 	// Execute: Create Panel (this builds the UI and wires the logic)
-	tabsSchema := wp.CreatePrefsSchema(sm)
-	sm.RenderTabs(*tabsSchema)
+	navSchema := wp.CreatePrefsSchema(sm)
+	sm.RenderNav(navSchema)
 
 	// Verify Check Widgets exist
 	faceCrop := sm.allWidgets["faceCrop"].(*widget.Check)
@@ -679,25 +674,21 @@ func TestOpenAddCollectionUI_FocusesProviderAndShowsAddQueryDialog(t *testing.T)
 		name           string
 		url            string
 		expectProvider string
-		expectTabIndex int
 	}{
 		{
 			name:           "Wallhaven URL opens Wallhaven Add Query dialog",
 			url:            "https://wallhaven.cc/search?q=cyberpunk",
 			expectProvider: "Wallhaven",
-			expectTabIndex: 2, // Online tab
 		},
 		{
 			name:           "Pexels URL opens Pexels Add Query dialog",
 			url:            "https://www.pexels.com/search/mountains/",
 			expectProvider: "Pexels",
-			expectTabIndex: 2, // Online tab
 		},
 		{
 			name:           "Wikimedia Commons URL opens Wikimedia Add Query dialog",
 			url:            "https://commons.wikimedia.org/wiki/Category:Featured_pictures_on_Wikimedia_Commons",
 			expectProvider: "Wikimedia",
-			expectTabIndex: 1, // Museums tab
 		},
 	}
 
@@ -711,9 +702,11 @@ func TestOpenAddCollectionUI_FocusesProviderAndShowsAddQueryDialog(t *testing.T)
 			sm := NewMockSettingsManager()
 			sm.On("ShowAddQueryDialog", mock.Anything, tc.url, "", mock.Anything).Return().Once()
 
-			tabsSchema := wp.CreatePrefsSchema(sm)
-			assert.NotNil(t, tabsSchema)
-			assert.Equal(t, tc.expectTabIndex, tabsSchema.Selected, "Expected provider tab to be selected")
+			navSchema := wp.CreatePrefsSchema(sm)
+			assert.NotNil(t, navSchema)
+			assert.Equal(t, tc.expectProvider, navSchema.Selected, "Expected the provider's page to be selected")
+			item, _ := navSchema.FindItem(tc.expectProvider)
+			assert.NotNil(t, item, "the selected page must exist in the navigation")
 
 			sm.AssertExpectations(t)
 			assert.Empty(t, wp.pendingAddUrl, "pendingAddUrl must be cleared after schema build")

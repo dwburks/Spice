@@ -518,15 +518,11 @@ func (p *Provider) GetDownloadHeaders() map[string]string {
 // CreateSettingsPanel returns the declarative UI for Wikimedia settings.
 func (p *Provider) CreateSettingsPanel(_ setting.SettingsManager) *schema.PanelSchema {
 	return &schema.PanelSchema{
+		Description: i18n.T("Wikimedia Commons is a media file repository making public domain and freely-licensed educational media content available to everyone."),
 		Sections: []schema.SectionSchema{
 			{
-				Title:   i18n.T("Wikimedia Commons"),
 				Compact: true,
 				Items: []schema.ItemSchema{
-					schema.LabelItem{
-						Text:       i18n.T("Wikimedia Commons is a media file repository making public domain and freely-licensed educational media content available to everyone."),
-						Importance: schema.ImportanceLow,
-					},
 					schema.HyperlinkItem{
 						Text: i18n.T("Donate to Wikimedia"),
 						URL:  "https://donate.wikimedia.org/",
@@ -564,14 +560,6 @@ func (p *Provider) CreateQueryPanel(sm setting.SettingsManager, pendingUrl strin
 				Title:   i18n.T("Wikimedia Queries"),
 				Compact: true,
 				Items: []schema.ItemSchema{
-					schema.ButtonItem{
-						Name:       "wikimedia_add",
-						ButtonText: i18n.T("Add New Collection"),
-						IconName:   "add",
-						OnPressed: func() {
-							sm.ShowAddQueryDialog(addCfg, "", "", sm.RefreshUI)
-						},
-					},
 					schema.QueryListItem{
 						GetQueries: func() []schema.Query {
 							queries := p.cfg.GetQueries()
@@ -594,6 +582,14 @@ func (p *Provider) CreateQueryPanel(sm setting.SettingsManager, pendingUrl strin
 						RemoveQuery:  p.cfg.RemoveImageQuery,
 						GetDisplayURL: func(q schema.Query) *url.URL {
 							return p.getDisplayURL(wallpaper.ImageQuery{URL: q.URL})
+						},
+					},
+					schema.ButtonItem{
+						Name:       "wikimedia_add",
+						ButtonText: i18n.T("Add New Collection"),
+						IconName:   "add",
+						OnPressed: func() {
+							sm.ShowAddQueryDialog(addCfg, "", "", sm.RefreshUI)
 						},
 					},
 				},

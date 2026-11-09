@@ -175,18 +175,7 @@ func (p *Provider) FetchImages(ctx context.Context, apiURL string, page int) ([]
 
 func (p *Provider) CreateSettingsPanel(sm setting.SettingsManager) *schema.PanelSchema {
 	return &schema.PanelSchema{
-		Sections: []schema.SectionSchema{
-			{
-				Title:   i18n.T("Google Photos"),
-				Compact: true,
-				Items: []schema.ItemSchema{
-					schema.LabelItem{
-						Text:       i18n.T("Google Photos is a photo sharing and storage service developed by Google."),
-						Importance: schema.ImportanceLow,
-					},
-				},
-			},
-		},
+		Description: i18n.T("Google Photos is a photo sharing and storage service developed by Google."),
 	}
 }
 

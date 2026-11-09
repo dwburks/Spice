@@ -26,7 +26,7 @@ func StringOptions(options []fmt.Stringer) []string {
 // SettingsManager is an interface for managing settings. It provides methods to create various types of settings widgets.
 // The interface is designed so that consumers in pkg/ never need to import Fyne directly.
 type SettingsManager interface {
-	GetApplySettingsButton() *widget.Button                        //GetApplySettingsButton returns the Apply Changes button from the SettingsManager to be used in the UI.
+	GetApplySettingsButton() *widget.Button                        // GetApplySettingsButton returns the staged-save ("Save changes") button.
 	SetSettingChangedCallback(settingName string, callback func()) // Set a callback function to be called when a setting changes.
 	RemoveSettingChangedCallback(settingName string)               // Remove a callback function associated with a specific setting.
 	SetRefreshFlag(settingName string)                             // Set a flag to indicate that a specific setting needs a refresh.
@@ -63,12 +63,6 @@ type SettingsManager interface {
 
 	// RenderSchema takes a pure Go UI definition and renders it to a Fyne container.
 	RenderSchema(p schema.PanelSchema) fyne.CanvasObject
-
-	// RenderTabs takes a pure Go tabs definition and renders it to a Fyne container.
-	RenderTabs(t schema.TabsSchema) fyne.CanvasObject
-
-	// RenderAccordion takes a pure Go accordion definition and renders it to a Fyne container.
-	RenderAccordion(a schema.AccordionSchema) fyne.CanvasObject
 
 	// OpenURL opens the specified URL in the system's default browser.
 	OpenURL(u string)

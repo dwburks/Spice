@@ -175,12 +175,7 @@ func (p *Provider) FetchImages(ctx context.Context, folderPath string, page int)
 
 // CreateSettingsPanel returns the declarative UI for Local Folder settings.
 func (p *Provider) CreateSettingsPanel(_ setting.SettingsManager) *schema.PanelSchema {
-	items := []schema.ItemSchema{
-		schema.LabelItem{
-			Text:       i18n.T("Browse to a folder on your computer containing wallpaper images."),
-			Importance: schema.ImportanceLow,
-		},
-	}
+	var items []schema.ItemSchema
 
 	if runtime.GOOS == "windows" {
 		items = append(items, schema.LabelItem{
@@ -190,9 +185,9 @@ func (p *Provider) CreateSettingsPanel(_ setting.SettingsManager) *schema.PanelS
 	}
 
 	return &schema.PanelSchema{
+		Description: i18n.T("Browse to a folder on your computer containing wallpaper images."),
 		Sections: []schema.SectionSchema{
 			{
-				Title:   i18n.T("Local Folders"),
 				Compact: true,
 				Items:   items,
 			},
@@ -207,18 +202,6 @@ func (p *Provider) CreateQueryPanel(sm setting.SettingsManager, _ string) *schem
 			{
 				Title: i18n.T("Local Folder Sources"),
 				Items: []schema.ItemSchema{
-					schema.FolderPickerItem{
-						Name:       "local_folder_add",
-						ButtonText: i18n.T("Add Folder"),
-						OnFolderSelected: func(path string) (string, error) {
-							desc := path
-							if len(desc) > 100 {
-								desc = desc[:100]
-							}
-							return p.cfg.AddLocalFolderQuery(desc, path, false)
-						},
-						EnableQuery: p.cfg.EnableImageQuery,
-					},
 					schema.QueryListItem{
 						GetQueries: func() []schema.Query {
 							queries := p.cfg.GetLocalFolderQueries()
@@ -252,6 +235,18 @@ func (p *Provider) CreateQueryPanel(sm setting.SettingsManager, _ string) *schem
 								Path:   slashPath,
 							}
 						},
+					},
+					schema.FolderPickerItem{
+						Name:       "local_folder_add",
+						ButtonText: i18n.T("Add Folder"),
+						OnFolderSelected: func(path string) (string, error) {
+							desc := path
+							if len(desc) > 100 {
+								desc = desc[:100]
+							}
+							return p.cfg.AddLocalFolderQuery(desc, path, false)
+						},
+						EnableQuery: p.cfg.EnableImageQuery,
 					},
 				},
 			},

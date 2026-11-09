@@ -38,10 +38,6 @@ func CreateMuseumSettingsPanel(cfg MuseumSettingsConfig, openURL func(string)) *
 	infoItems := []ItemSchema{}
 
 	infoItems = append(infoItems,
-		LabelItem{
-			Text:       cfg.Description,
-			Importance: ImportanceLow,
-		},
 		HorizontalRowItem{
 			Items: []ItemSchema{
 				LabelItem{Text: cfg.Location, Importance: ImportanceLow},
@@ -54,6 +50,12 @@ func CreateMuseumSettingsPanel(cfg MuseumSettingsConfig, openURL func(string)) *
 		HorizontalRowItem{
 			Items: []ItemSchema{
 				ButtonItem{
+					Name:       prefix + "_web",
+					ButtonText: i18n.T("Visit Website"),
+					IconName:   "Home",
+					OnPressed:  func() { openURL(cfg.WebsiteURL) },
+				},
+				ButtonItem{
 					Name:       prefix + "_visit",
 					ButtonText: i18n.T("Plan a Visit"),
 					IconName:   "MapPin",
@@ -61,12 +63,6 @@ func CreateMuseumSettingsPanel(cfg MuseumSettingsConfig, openURL func(string)) *
 						u := fmt.Sprintf("https://www.google.com/maps/search/?api=1&query=%s", url.QueryEscape(cfg.MapQuery))
 						openURL(u)
 					},
-				},
-				ButtonItem{
-					Name:       prefix + "_web",
-					ButtonText: i18n.T("Visit Website"),
-					IconName:   "Home",
-					OnPressed:  func() { openURL(cfg.WebsiteURL) },
 				},
 				ButtonItem{
 					Name:       prefix + "_donate",
@@ -89,10 +85,11 @@ func CreateMuseumSettingsPanel(cfg MuseumSettingsConfig, openURL func(string)) *
 		})
 	}
 
+	// The museum's title and description belong to the page header (PanelSchema.Description);
+	// the first section holds its links and the framing toggle.
 	sections := []SectionSchema{
 		{
 			ID:      cfg.ID,
-			Title:   cfg.Title,
 			Compact: true,
 			Items:   infoItems,
 		},
@@ -126,6 +123,7 @@ func CreateMuseumSettingsPanel(cfg MuseumSettingsConfig, openURL func(string)) *
 	}
 
 	return &PanelSchema{
-		Sections: sections,
+		Description: cfg.Description,
+		Sections:    sections,
 	}
 }

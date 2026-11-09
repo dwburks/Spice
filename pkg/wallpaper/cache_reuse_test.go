@@ -294,7 +294,7 @@ func TestCacheReuse_QueryDeleteAndURLChangeKeepMasters(t *testing.T) {
 	keepMaster := addWithMaster(t, store, fm, "Wallhaven_keep1", "qKeep", 10)
 
 	wp.onQueryRemoved("qDel")
-	wp.onQueryURLChanged("qURL") // query unknown to cfg -> treated as inactive, no fetch
+	wp.onQueryURLChanged("qURL", "qURL2") // new ID unknown to cfg -> treated as inactive, no fetch
 	require.True(t, fm.WaitTimeout(5*time.Second))
 
 	assert.Equal(t, 1, store.Count())

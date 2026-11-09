@@ -55,9 +55,9 @@ func TestRenderQueryList_EditCommitsImmediatelyWithoutPendingChange(t *testing.T
 	var gotID, gotDesc, gotURL string
 	cfg := &schema.AddQueryConfig{
 		Title: "Edit",
-		UpdateHandler: func(id, desc, u string) error {
+		UpdateHandler: func(id, desc, u string) (string, error) {
 			gotID, gotDesc, gotURL = id, desc, u
-			return nil
+			return id, nil
 		},
 	}
 	queries := []schema.Query{{ID: "user", URL: "https://api.example.com/a", Description: "User", Active: true}}
@@ -123,4 +123,48 @@ func collectEntries(root fyne.CanvasObject, out *[]string) {
 			*out = append(*out, e.Text)
 		}
 	})
+}
+
+// A URL edit gives the query a new ID: staged UI state keyed by the old ID is dropped so
+// Apply never calls Enable/Disable for a query that no longer exists.
+func TestRenderQueryList_URLEditReKeysAndDropsStalePendingToggle(t *testing.T) {
+	var toggled []string
+	cfg := &schema.AddQueryConfig{
+		Title:         "Edit",
+		UpdateHandler: func(id, desc, u string) (string, error) { return "user-v2", nil },
+	}
+	queries := []schema.Query{{ID: "user", URL: "https://api.example.com/a", Description: "User", Active: true}}
+
+	app := test.NewApp()
+	defer app.Quit()
+	w := app.NewWindow("QueryEditReKey")
+	sm := NewSettingsManager(w).(*SettingsManager)
+	ql := sm.renderQueryList(schema.QueryListItem{
+		GetQueries:    func() []schema.Query { return queries },
+		EnableQuery:   func(id string) error { toggled = append(toggled, "enable:"+id); return nil },
+		DisableQuery:  func(id string) error { toggled = append(toggled, "disable:"+id); return nil },
+		RemoveQuery:   func(string) error { return nil },
+		GetDisplayURL: func(q schema.Query) *url.URL { u, _ := url.Parse("https://www.example.com/b"); return u },
+		EditConfig:    cfg,
+	}).(*queryListWidget)
+	w.SetContent(ql)
+	w.Resize(fyneSize(900, 700))
+	w.Show()
+
+	ql.rows[0].activeCheck.Toggle() // user turns it off: staged, not applied
+	require.True(t, sm.HasPendingChange("user"))
+
+	test.Tap(ql.rows[0].editButton)
+	top := w.Canvas().Overlays().Top()
+	require.NotNil(t, top)
+	save := findButtonByText(top, "Save")
+	require.NotNil(t, save)
+	queries[0].ID = "user-v2" // what the config now holds
+	test.Tap(save)
+
+	assert.False(t, sm.HasPendingChange("user"), "stale staged toggle for the old ID is dropped")
+	for _, cb := range sm.chgPrefsCallbacks {
+		cb()
+	}
+	assert.Empty(t, toggled, "no Enable/Disable is applied to the old ID")
 }

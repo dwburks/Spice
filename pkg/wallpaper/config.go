@@ -68,16 +68,19 @@ type Config struct {
 	Tuning                  TuningConfig    `json:"tuning"`
 
 	// Callbacks
-	QueryRemovedCallback      func(queryID string) `json:"-"`
-	QueryURLChangedCallback   func(queryID string) `json:"-"`
-	QueryDisabledCallback     func(queryID string) `json:"-"`
-	QueryEnabledCallback      func(queryID string) `json:"-"`
-	FavoritesClearedCallback  func()               `json:"-"`
-	ShortcutsDisabled         bool                 `json:"-"`
-	TargetedShortcutsDisabled bool                 `json:"-"`
-	WallhavenSyncEnabled      bool                 `json:"-"`
-	MonitorPauseStates        map[string]bool      `json:"monitor_pause_states"`
-	GameProcesses             []string             `json:"game_processes,omitempty"`
+	QueryRemovedCallback    func(queryID string)      `json:"-"`
+	QueryURLChangedCallback func(oldID, newID string) `json:"-"`
+	QueryDisabledCallback   func(queryID string)      `json:"-"`
+	QueryEnabledCallback    func(queryID string)      `json:"-"`
+	// queryIDRemap records query IDs renamed by UpdateCollisionsStep (old -> new) during this
+	// load, so the plugin can re-tag images still carrying an old ID. Not persisted.
+	queryIDRemap              map[string]string
+	FavoritesClearedCallback  func()          `json:"-"`
+	ShortcutsDisabled         bool            `json:"-"`
+	TargetedShortcutsDisabled bool            `json:"-"`
+	WallhavenSyncEnabled      bool            `json:"-"`
+	MonitorPauseStates        map[string]bool `json:"monitor_pause_states"`
+	GameProcesses             []string        `json:"game_processes,omitempty"`
 }
 
 type VirtualFramingMode int
@@ -265,7 +268,7 @@ func (c *Config) AddProviderQuery(description, url, provider string, active, man
 		id = url
 	} else {
 		// Include provider in ID to prevent collisions across different providers using same IDs (e.g. object:123)
-		id = GenerateQueryID(provider + ":" + url)
+		id = queryIDFor(provider, url)
 	}
 	log.Debugf("[Config] AddProviderQuery: provider=%s, url=%s, generatedID=%s", provider, url, id)
 
@@ -314,18 +317,22 @@ func (c *Config) AddProviderQuery(description, url, provider string, active, man
 	return id, nil
 }
 
-// UpdateQuery edits the description and URL of an existing, non-managed query in place.
-// The query keeps its ID, Active state, Provider and Managed flag. If the URL changed,
-// QueryURLChangedCallback is triggered so the plugin can discard images fetched for the old search.
+// UpdateQuery edits the description and URL of an existing, non-managed query in place and
+// returns the query's ID afterwards. A description-only edit keeps the ID. A URL edit gives
+// the query the ID it would have if added with that URL (queryIDFor, the same value
+// AddProviderQuery and UpdateCollisionsStep compute), so the next startup's migration has
+// nothing to rename and images fetched after the edit stay linked to their query. Active,
+// Provider and Managed carry over. QueryURLChangedCallback(oldID, newID) then lets the plugin
+// discard the old search's images and state.
 // The caller is responsible for passing a URL already normalized the same way it would be for AddProviderQuery.
-func (c *Config) UpdateQuery(id, desc, url string) error {
+func (c *Config) UpdateQuery(id, desc, url string) (string, error) {
 	desc = strings.TrimSpace(desc)
 	url = strings.TrimSpace(url)
 	if desc == "" {
-		return fmt.Errorf("query description cannot be empty")
+		return "", fmt.Errorf("query description cannot be empty")
 	}
 	if url == "" {
-		return fmt.Errorf("query URL cannot be empty")
+		return "", fmt.Errorf("query URL cannot be empty")
 	}
 
 	c.mu.Lock()
@@ -333,36 +340,44 @@ func (c *Config) UpdateQuery(id, desc, url string) error {
 
 	idx, err := c.findQueryIndex(id)
 	if err != nil {
-		return err
+		return "", err
 	}
 	q := c.Queries[idx]
 	if q.Managed {
-		return fmt.Errorf("cannot edit a managed system query: %s", id)
+		return "", fmt.Errorf("cannot edit a managed system query: %s", id)
 	}
 
+	newID := id
 	urlChanged := q.URL != url
 	if urlChanged {
 		// Mirror AddProviderQuery's dedupe (provider-scoped ID), and also compare stored URLs
-		// because an edited query keeps its original ID.
-		candidateID := GenerateQueryID(q.Provider + ":" + url)
+		// (queries edited by older builds kept their original ID).
+		newID = queryIDFor(q.Provider, url)
 		for i, other := range c.Queries {
-			if i == idx || other.Provider != q.Provider {
+			if i == idx {
 				continue
 			}
-			if other.ID == candidateID || other.URL == url {
-				return fmt.Errorf("duplicate query: this URL already exists")
+			if other.ID == newID || (other.Provider == q.Provider && other.URL == url) {
+				return "", fmt.Errorf("duplicate query: this URL already exists")
 			}
 		}
 	}
 
+	c.Queries[idx].ID = newID
 	c.Queries[idx].Description = desc
 	c.Queries[idx].URL = url
 	c.save()
 
 	if urlChanged && c.QueryURLChangedCallback != nil {
-		go c.QueryURLChangedCallback(id)
+		go c.QueryURLChangedCallback(id, newID)
 	}
-	return nil
+	return newID, nil
+}
+
+// queryIDFor is the ID of a non-Favorites query: AddProviderQuery, UpdateQuery and the
+// UpdateCollisionsStep migration must all agree on it byte for byte.
+func queryIDFor(provider, url string) string {
+	return GenerateQueryID(provider + ":" + url)
 }
 
 // AddImageQuery adds a new Wallhaven image query.
@@ -503,8 +518,19 @@ func (c *Config) SetQueryRemovedCallback(callback func(queryID string)) {
 	c.QueryRemovedCallback = callback
 }
 
+// QueryIDRemap returns the query IDs renamed by the migrations of this load (old -> new).
+func (c *Config) QueryIDRemap() map[string]string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make(map[string]string, len(c.queryIDRemap))
+	for k, v := range c.queryIDRemap {
+		out[k] = v
+	}
+	return out
+}
+
 // SetQueryURLChangedCallback sets the callback for when a query's URL is edited.
-func (c *Config) SetQueryURLChangedCallback(callback func(queryID string)) {
+func (c *Config) SetQueryURLChangedCallback(callback func(oldID, newID string)) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.QueryURLChangedCallback = callback

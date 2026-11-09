@@ -523,28 +523,29 @@ func TestStore_ResolutionBuckets(t *testing.T) {
 // makeDownloaderFlags() and makeGroomingTarget() below, or this test will
 // fail and tell you exactly what's wrong.
 
-// makeDownloaderFlags builds the ProcessingFlags map exactly as downloader.go does.
-// See downloader.go:L113-126.
-func makeDownloaderFlags(smartFit bool, mode SmartFitMode, faceCrop, faceBoost bool) map[string]bool {
-	return map[string]bool{
-		"SmartFit":       smartFit,
-		"FitFlexibility": mode == SmartFitAggressive,
-		"FitQuality":     mode == SmartFitNormal,
-		"FaceCrop":       faceCrop,
-		"FaceBoost":      faceBoost,
-	}
+// flagFixturePlugin is a Plugin whose config has the given processing settings (and the
+// default framing settings), for the two helpers below.
+func flagFixturePlugin(smartFit bool, mode SmartFitMode, faceCrop, faceBoost bool) *Plugin {
+	cfg := &Config{Preferences: NewMockPreferences(), VirtualFrameSize: 0.85, VirtualFramingFallback: true, VirtualPaperMatting: true}
+	cfg.SetSmartFit(smartFit)
+	cfg.SetSmartFitMode(mode)
+	cfg.SetFaceCropEnabled(faceCrop)
+	cfg.SetFaceBoostEnabled(faceBoost)
+	return &Plugin{cfg: cfg}
 }
 
-// makeGroomingTarget builds the targetFlags map exactly as syncStoreWithConfig() does.
-// See wallpaper.go:L1242-1248.
+// makeDownloaderFlags returns the ProcessingFlags that ProcessImageJob stamps, computed by
+// the real code (Plugin.stampProcessingFlags), so this test can no longer drift from it.
+func makeDownloaderFlags(smartFit bool, mode SmartFitMode, faceCrop, faceBoost bool) map[string]bool {
+	var img provider.Image
+	flagFixturePlugin(smartFit, mode, faceCrop, faceBoost).stampProcessingFlags(&img)
+	return img.ProcessingFlags
+}
+
+// makeGroomingTarget returns the targetFlags syncStoreWithConfig passes to Sync, computed
+// by the real code (Plugin.processingFlags).
 func makeGroomingTarget(smartFit bool, mode SmartFitMode, faceCrop, faceBoost bool) map[string]bool {
-	return map[string]bool{
-		"SmartFit":       smartFit,
-		"FitFlexibility": mode == SmartFitAggressive,
-		"FitQuality":     mode == SmartFitNormal,
-		"FaceCrop":       faceCrop,
-		"FaceBoost":      faceBoost,
-	}
+	return flagFixturePlugin(smartFit, mode, faceCrop, faceBoost).processingFlags()
 }
 
 // createMasterFile creates a fake master .jpg for an image ID so it passes validation.
@@ -1371,11 +1372,12 @@ func TestClearDerivatives_RemovesFromBuckets(t *testing.T) {
 	ids = store.GetIDsForResolution("3440x1440")
 	assert.NotContains(t, ids, "test1", "Image should be removed from bucket after ClearDerivatives")
 
-	// Verify the image still exists but has empty maps
+	// Verify the image still exists with no derivatives. Its processing-settings flags are
+	// kept (they still describe the image; wiping them made the next Sync invalidate it).
 	got, found := store.GetByID("test1")
 	assert.True(t, found, "Image should still be in the store")
 	assert.Empty(t, got.DerivativePaths, "DerivativePaths should be empty")
-	assert.Empty(t, got.ProcessingFlags, "ProcessingFlags should be empty")
+	assert.Equal(t, map[string]bool{"SmartFit": true}, got.ProcessingFlags, "settings flags are kept")
 }
 
 func TestClearDerivatives_NotFound(t *testing.T) {

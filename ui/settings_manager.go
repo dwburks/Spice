@@ -492,6 +492,17 @@ func (sm *SettingsManager) RemoveSettingChangedCallback(settingName string) {
 	delete(sm.chgPrefsCallbacks, settingName)
 }
 
+// forgetQueryKey drops every piece of staged UI state keyed by a query ID that no longer
+// exists (its URL was edited, which gives the query a new ID), then re-evaluates Apply.
+func (sm *SettingsManager) forgetQueryKey(id string) {
+	delete(sm.chgPrefsCallbacks, id)
+	delete(sm.refreshFlags, id)
+	delete(sm.registry, id)
+	delete(sm.rowDots, id)
+	delete(sm.pageOf, id)
+	sm.checkAndEnableApply()
+}
+
 // SetRefreshFlag sets a flag to indicate that a specific setting needs a refresh.
 func (sm *SettingsManager) SetRefreshFlag(settingName string) {
 	sm.refreshFlags[settingName] = true
@@ -846,11 +857,18 @@ func (sm *SettingsManager) showQueryDialog(cfg schema.AddQueryConfig, editID, in
 			if cfg.UpdateHandler == nil {
 				return
 			}
-			if err := cfg.UpdateHandler(editID, descEntry.Text, urlEntry.Text); err != nil {
+			newID, err := cfg.UpdateHandler(editID, descEntry.Text, urlEntry.Text)
+			if err != nil {
 				formStatus.SetText(err.Error())
 				formStatus.Importance = widget.DangerImportance
 				formStatus.Refresh()
 				return
+			}
+			if newID != "" && newID != editID {
+				// A URL edit re-keys the query: drop UI state keyed by the old ID so no
+				// stale staged toggle is applied to a query that no longer exists. The
+				// refreshed row seeds its baseline from the edited query.
+				sm.forgetQueryKey(editID)
 			}
 			if onDone != nil {
 				onDone()

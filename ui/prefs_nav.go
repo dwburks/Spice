@@ -123,6 +123,20 @@ func newPrefsNavView(sm *SettingsManager, nav *schema.NavSchema, initial string)
 	return v
 }
 
+// scrollPageToTop resets every scroll container inside a page to its top, so a page always opens
+// at its header instead of wherever it was last left.
+func scrollPageToTop(obj fyne.CanvasObject) {
+	switch o := obj.(type) {
+	case *container.Scroll:
+		o.ScrollToTop()
+		scrollPageToTop(o.Content)
+	case *fyne.Container:
+		for _, child := range o.Objects {
+			scrollPageToTop(child)
+		}
+	}
+}
+
 // Root returns the window content.
 func (v *prefsNavView) Root() fyne.CanvasObject { return v.root }
 
@@ -134,6 +148,9 @@ func (v *prefsNavView) Select(id string) {
 	page, ok := v.pages[id]
 	if !ok {
 		return
+	}
+	if id != v.current {
+		scrollPageToTop(page) // pages are built up front, so reset any old offset
 	}
 	v.current = id
 	v.content.Objects = []fyne.CanvasObject{page}

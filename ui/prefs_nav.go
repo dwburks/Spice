@@ -36,10 +36,10 @@ var navStyleWindows = runtime.GOOS == "windows"
 // prefsNavView is the rendered navigation: sidebar, page stack and save pill.
 type prefsNavView struct {
 	sidebarBox fyne.CanvasObject // the sidebar column inside its scroll (sizing tests)
-	sm      *SettingsManager
-	nav     *schema.NavSchema
-	root    fyne.CanvasObject
-	content *fyne.Container
+	sm         *SettingsManager
+	nav        *schema.NavSchema
+	root       fyne.CanvasObject
+	content    *fyne.Container
 
 	pages     map[string]fyne.CanvasObject
 	sidebar   map[string]*navItemWidget

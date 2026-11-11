@@ -48,7 +48,7 @@ type spicePalette struct {
 }
 
 func hexColor(v uint32) color.NRGBA {
-	return color.NRGBA{R: uint8(v >> 16), G: uint8(v >> 8), B: uint8(v), A: 0xFF}
+	return color.NRGBA{R: uint8(v >> 16 & 0xFF), G: uint8(v >> 8 & 0xFF), B: uint8(v & 0xFF), A: 0xFF} //nolint:gosec // G115: each channel is masked to 8 bits
 }
 
 func withAlpha(c color.NRGBA, a uint8) color.NRGBA {

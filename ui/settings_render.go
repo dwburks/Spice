@@ -583,8 +583,7 @@ func isAddIcon(name string) bool {
 }
 
 func (sm *SettingsManager) renderConfirmButtonRow(v schema.ConfirmButtonItem) fyne.CanvasObject {
-	var button *widget.Button
-	button = sm.newSmallButton(v.ButtonText, sm.getIconResource(v.IconName), func() {
+	button := sm.newSmallButton(v.ButtonText, sm.getIconResource(v.IconName), func() {
 		if v.ConfirmTitle != "" && v.ConfirmMessage != "" {
 			d := dialog.NewConfirm(v.ConfirmTitle, v.ConfirmMessage, func(b bool) {
 				if b {

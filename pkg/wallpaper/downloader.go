@@ -138,6 +138,9 @@ func (wp *Plugin) ProcessImageJob(ctx context.Context, job DownloadJob) (resultI
 	// lands in the store via stateManagerLoop (Add or Update fallback).
 
 	if incompatibleCount == len(resolutions) && len(resolutions) > 0 {
+		// Record the settings the rejection was decided under: when one changes (for example
+		// the minimum image size), Sync sees the tags are stale and lets the image be judged again.
+		wp.stampProcessingFlags(&img)
 		return wp.rejectIncompatible(img, reuse)
 	}
 
@@ -150,6 +153,7 @@ func (wp *Plugin) ProcessImageJob(ctx context.Context, job DownloadJob) (resultI
 	if err != nil {
 		if ctx.Err() == nil && taggedIncompatibleWithAll(img, resolutions) {
 			// Every resolution rejected the image while fitting: a property of the image.
+			wp.stampProcessingFlags(&img)
 			return wp.rejectIncompatible(img, reuse)
 		}
 		// I/O, decode, cancellation...: not a property of the image. Admit or replace
@@ -188,19 +192,7 @@ func (wp *Plugin) checkImageCompatibility(img provider.Image) error {
 		return nil // Cannot check without dimensions
 	}
 
-	var resolutions []Resolution
-	monitors, err := wp.os.GetMonitors()
-	if err == nil && len(monitors) > 0 {
-		resolutions = GetUniqueResolutions(monitors)
-	}
-
-	// Fallback to primary if Sync is OFF or GetMonitors failed
-	if len(resolutions) == 0 {
-		w, h, err := wp.os.GetDesktopDimension()
-		if err == nil {
-			resolutions = append(resolutions, Resolution{Width: w, Height: h})
-		}
-	}
+	resolutions := wp.connectedResolutions()
 
 	// Check all candidate resolutions.
 	incompatibleCount := 0
@@ -532,7 +524,11 @@ func (wp *Plugin) generateMissingDerivatives(ctx context.Context, img provider.I
 
 		// Compatibility check
 		if err := wp.imgProcessor.CheckCompatibility(srcImg.Bounds().Dx(), srcImg.Bounds().Dy(), res.Width, res.Height); err != nil && !errors.Is(err, ErrRequiresVirtualFraming) {
+			// Checked against the decoded size: the provider's dimensions may have been missing or wrong.
 			log.Debugf("Skipping derivative for %s: incompatible: %v", resDir, err)
+			if img.ProcessingFlags != nil {
+				img.ProcessingFlags["incompatible:"+resDir] = true
+			}
 			continue
 		}
 

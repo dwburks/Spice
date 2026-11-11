@@ -109,90 +109,10 @@ func (c *SmartImageProcessor) EncodeImage(ctx context.Context, img image.Image, 
 	return buf.Bytes(), nil
 }
 
-// CheckCompatibility checks if an image of given dimensions is compatible with Smart Fit settings.
-// CheckCompatibility checks if an image of given dimensions is compatible with Smart Fit settings.
+// CheckCompatibility checks if an image of given dimensions fits a display under the saved
+// settings. The error matches ErrImageTooSmall or ErrShapeIncompatible (errors.Is).
 func (c *SmartImageProcessor) CheckCompatibility(imgWidth, imgHeight, systemWidth, systemHeight int) error {
-	mode := c.config.GetSmartFitMode()
-
-	if mode == SmartFitOff {
-		return nil
-	}
-
-	if imgWidth <= 0 || imgHeight <= 0 || systemWidth <= 0 || systemHeight <= 0 {
-		return nil // Assume compatible if dimensions are missing/invalid (prevents test regressions)
-	}
-
-	// 2. Aspect Ratio Tolerance
-	imageAspect := float64(imgWidth) / float64(imgHeight)
-	systemAspect := float64(systemWidth) / float64(systemHeight)
-	aspectDiff := math.Abs(systemAspect - imageAspect)
-
-	// "Quality" Mode (SmartFitNormal)
-	if mode == SmartFitNormal {
-		return c.checkQualityModeCompatibility(imgWidth, imgHeight, systemWidth, systemHeight, aspectDiff)
-	}
-
-	// "Flexibility" Mode (SmartFitAggressive)
-	if mode == SmartFitAggressive {
-		return c.checkFlexibilityModeCompatibility(imgWidth, imgHeight, systemWidth, systemHeight, aspectDiff)
-	}
-
-	return nil
-}
-
-func (c *SmartImageProcessor) checkQualityModeCompatibility(imgWidth, imgHeight, systemWidth, systemHeight int, aspectDiff float64) error {
-	isSquare := imgWidth == imgHeight
-	if !isSquare {
-		srcLand := imgWidth > imgHeight
-		tgtLand := systemWidth > systemHeight
-		if srcLand != tgtLand {
-			maxOriDiff := math.Min(c.config.Tuning.QualityOrientationMaxDiff, c.config.Tuning.AspectThreshold)
-			if aspectDiff > maxOriDiff {
-				return fmt.Errorf("incompatible orientation for Quality mode (Diff %.2f > %.2f)", aspectDiff, maxOriDiff)
-			}
-		}
-	}
-
-	if aspectDiff > c.config.Tuning.AspectThreshold {
-		return fmt.Errorf("aspect ratio diff too large for Quality mode (%.2f > %.2f)", aspectDiff, c.config.Tuning.AspectThreshold)
-	}
-	return nil
-}
-
-func (c *SmartImageProcessor) checkFlexibilityModeCompatibility(imgWidth, imgHeight, systemWidth, systemHeight int, aspectDiff float64) error {
-	scaleX := float64(imgWidth) / float64(systemWidth)
-	scaleY := float64(imgHeight) / float64(systemHeight)
-	surplus := math.Min(scaleX, scaleY)
-
-	// Dynamic Formula: Base * Surplus * AggressiveMultiplier
-	effectiveThreshold := c.config.Tuning.AspectThreshold * surplus * c.config.Tuning.AggressiveMultiplier
-
-	// SAFETY CAP: Even with high resolution, don't allow insane crops.
-	if effectiveThreshold > c.config.Tuning.FlexibilityAbsoluteMaxDiff {
-		effectiveThreshold = c.config.Tuning.FlexibilityAbsoluteMaxDiff
-	}
-
-	// Orientation Safety: Block drastic mismatches (e.g. Landscape on Portrait)
-	// Square images (imgWidth == imgHeight) are exempted to allow safe cropping.
-	isSquare := imgWidth == imgHeight
-	if !isSquare {
-		srcLand := imgWidth > imgHeight
-		tgtLand := systemWidth > systemHeight
-		if srcLand != tgtLand {
-			// Orientation Mismatch: Cap threshold to block bad crops (e.g. 16:9 on 9:16)
-			if effectiveThreshold > c.config.Tuning.FlexibilityOrientationMaxDiff {
-				effectiveThreshold = c.config.Tuning.FlexibilityOrientationMaxDiff
-			}
-		}
-	}
-
-	log.Debugf("SmartFit [Flexibility]: Check (Src: %dx%d, Tgt: %dx%d, Surplus: %.2f, DynamicThreshold: %.2f, Diff: %.2f)",
-		imgWidth, imgHeight, systemWidth, systemHeight, surplus, effectiveThreshold, aspectDiff)
-
-	if aspectDiff > effectiveThreshold {
-		return fmt.Errorf("image aspect ratio not compatible (Diff: %.2f > Limit: %.2f)", aspectDiff, effectiveThreshold)
-	}
-	return nil
+	return c.config.Policy().Check(imgWidth, imgHeight, systemWidth, systemHeight)
 }
 
 // FitImage fits an image with context awareness.

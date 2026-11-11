@@ -61,26 +61,12 @@ func (v *VirtualFramer) CheckCompatibility(imgWidth, imgHeight, targetWidth, tar
 
 	if err != nil {
 		// Do NOT rescue images that are too small. Virtual framing can't fix low resolution.
-		if strings.Contains(err.Error(), "insufficient size") {
+		if errors.Is(err, ErrImageTooSmall) || strings.Contains(err.Error(), "insufficient size") {
 			return err
 		}
 
-		if v.cfg.VirtualFramingFallback {
+		if v.cfg.framingRescuesShape() {
 			return ErrRequiresVirtualFraming // Rescue aspect ratio mismatches
-		}
-
-		v.cfg.mu.RLock()
-		hasMuseumMode := false
-		for _, enabled := range v.cfg.MuseumFraming {
-			if enabled {
-				hasMuseumMode = true
-				break
-			}
-		}
-		v.cfg.mu.RUnlock()
-
-		if hasMuseumMode {
-			return ErrRequiresVirtualFraming
 		}
 	}
 

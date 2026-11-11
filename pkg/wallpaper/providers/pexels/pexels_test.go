@@ -238,3 +238,12 @@ func TestProvider_FetchImages_NoAuth(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "missing")
 }
+
+// Search results carry the original's size; mapping it lets too-small images be skipped before
+// they are downloaded.
+func TestMapPexelsImage_CarriesOriginalSize(t *testing.T) {
+	p := &Provider{}
+	img := p.mapPexelsImage(PexelsPhoto{ID: 7, Width: 6000, Height: 4000, Src: PexelsSrc{Original: "https://images.pexels.com/photos/7/original.jpeg"}})
+	assert.Equal(t, 6000, img.Width)
+	assert.Equal(t, 4000, img.Height)
+}

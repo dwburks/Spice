@@ -950,6 +950,12 @@ func (s *ImageStore) determineSyncAction(img provider.Image, activeQueryIDs map[
 		// If it's a known incompatible image, keep it in the DB (as a zombie)
 		// so we don't forget its processing flags and redownload it over and over!
 		if s.hasIncompatibleFlags(img) {
+			// The tags were decided under specific settings. Once one of them changes (shape,
+			// minimum image size...) they are stale: drop the record so the next fetch judges
+			// the image again instead of rejecting it from the old tags.
+			if len(targetFlags) > 0 && !s.flagsMatch(img, targetFlags) {
+				return ImageActionDelete
+			}
 			return ImageActionKeep
 		}
 		return ImageActionDelete

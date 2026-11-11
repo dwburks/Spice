@@ -151,23 +151,39 @@ func cleanQueryParams(baseURL string) (string, error) {
 	return parsedURL.String(), nil
 }
 
-// WithResolution adds resolution constraints to the API URL if missing.
+// WithResolution adds an `atleast` size floor to the API URL unless the query already sets
+// `atleast` or `resolutions` (`ratios` alone does not stop it: it only fixes the shape). With
+// the Minimum image size setting on "Any size" nothing is added.
 func (p *Provider) WithResolution(apiURL string, width, height int) string {
+	if p.cfg != nil && p.cfg.Preferences != nil && p.cfg.GetMinImageSize().MaxUpscale() == 0 {
+		return apiURL
+	}
 	u, err := url.Parse(apiURL)
 	if err != nil {
 		return apiURL // Return original if parsing fails
 	}
 
 	q := u.Query()
-	// Only add 'atleast' if no other resolution constraints are present
-	if !q.Has("atleast") && !q.Has("resolutions") && !q.Has("ratios") {
-		q.Set("atleast", fmt.Sprintf("%dx%d", width, height))
+	if addSizeFloor(q, width, height) {
 		u.RawQuery = q.Encode()
 		return u.String()
 	}
 
 	return apiURL
 }
+
+// addSizeFloor sets `atleast` on q unless the query already has `atleast` or `resolutions`.
+// It reports whether it changed q.
+func addSizeFloor(q url.Values, width, height int) bool {
+	if width <= 0 || height <= 0 || q.Has("atleast") || q.Has("resolutions") {
+		return false
+	}
+	q.Set("atleast", fmt.Sprintf("%dx%d", width, height))
+	return true
+}
+
+// FiltersByMinResolution marks Wallhaven as a provider that applies provider.MinResolutionKey.
+func (p *Provider) FiltersByMinResolution() bool { return true }
 
 // DiscoverCollections fetches all public collections for a given username.
 func (p *Provider) DiscoverCollections(ctx context.Context, username string) ([]wallpaper.ImageQuery, error) {
@@ -306,6 +322,12 @@ func (p *Provider) FetchImages(ctx context.Context, apiURL string, page int) ([]
 		q.Set("apikey", p.cfg.GetWallhavenAPIKey())
 	}
 	q.Set("page", fmt.Sprint(page))
+
+	// Size floor for this request only (the stored query URL, and so its ID, is not touched):
+	// the smallest image usable on a connected display, from the Minimum image size setting.
+	if mr, ok := ctx.Value(provider.MinResolutionKey).(provider.MinResolution); ok {
+		addSizeFloor(q, mr.Width, mr.Height)
+	}
 
 	// We need desktop dimensions for default query if no resolutions/atleast specified.
 	// Provider doesn't have direct access to OS anymore.

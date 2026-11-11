@@ -311,16 +311,10 @@ func (sa *SpiceApp) renderMenuSchema(m *schema.MenuSchema) []*fyne.MenuItem {
 		var mi *fyne.MenuItem
 		if item.SubMenu != nil {
 			subItems := sa.renderMenuSchema(item.SubMenu)
-			mi = sa.CreateMenuItem(item.Label, item.Action, item.IconName)
-			if len(item.IconBytes) > 0 {
-				mi.Icon = fyne.NewStaticResource(item.IconName, item.IconBytes)
-			}
+			mi = sa.createSchemaMenuItem(item)
 			mi.ChildMenu = fyne.NewMenu(item.Label, subItems...)
 		} else {
-			mi = sa.CreateMenuItem(item.Label, item.Action, item.IconName)
-			if len(item.IconBytes) > 0 {
-				mi.Icon = fyne.NewStaticResource(item.IconName, item.IconBytes)
-			}
+			mi = sa.createSchemaMenuItem(item)
 			if item.IsChecked {
 				mi.Checked = true
 			}
@@ -384,6 +378,18 @@ func (sa *SpiceApp) deactivateAllPlugins() {
 		plugin.Deactivate()
 		utilLog.Printf("Deactivated plugin: %s", plugin.Name())
 	}
+}
+
+// createSchemaMenuItem builds a tray menu item from a schema item. When the schema carries icon
+// bytes (e.g. a provider logo) those are used directly and IconName is only the resource name, so
+// it must not be looked up as an embedded asset file.
+func (sa *SpiceApp) createSchemaMenuItem(item schema.MenuItemSchema) *fyne.MenuItem {
+	if len(item.IconBytes) > 0 {
+		mi := sa.CreateMenuItem(item.Label, item.Action, "")
+		mi.Icon = fyne.NewStaticResource(item.IconName, item.IconBytes)
+		return mi
+	}
+	return sa.CreateMenuItem(item.Label, item.Action, item.IconName)
 }
 
 // CreateMenuItem creates a menu item with the given label, action, and icon

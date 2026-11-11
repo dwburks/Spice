@@ -35,6 +35,7 @@ var navStyleWindows = runtime.GOOS == "windows"
 
 // prefsNavView is the rendered navigation: sidebar, page stack and save pill.
 type prefsNavView struct {
+	sidebarBox fyne.CanvasObject // the sidebar column inside its scroll (sizing tests)
 	sm      *SettingsManager
 	nav     *schema.NavSchema
 	root    fyne.CanvasObject
@@ -95,7 +96,7 @@ func newPrefsNavView(sm *SettingsManager, nav *schema.NavSchema, initial string)
 	}
 	sm.currentPage = ""
 
-	sidebarBox := container.New(&tightVBoxLayout{overlap: -2}, sidebarObjs...)
+	sidebarBox := container.New(&tightVBoxLayout{overlap: 0}, sidebarObjs...)
 	sidebarScroll := container.NewVScroll(container.New(&paddedLayout{x: 10, y: 12}, sidebarBox))
 	sidebarBG := newThemedRect(colorNameSidebar, "", 0)
 	edge := newThemedRect(colorNameBorder, "", 0)
@@ -110,6 +111,7 @@ func newPrefsNavView(sm *SettingsManager, nav *schema.NavSchema, initial string)
 	main := container.NewStack(v.content, overlay)
 
 	v.root = container.NewBorder(nil, nil, sidebar, nil, main)
+	v.sidebarBox = sidebarBox
 
 	sm.AddDirtyObserver(v.syncDirty)
 
@@ -484,7 +486,7 @@ func newIconTile(res fyne.Resource, size float32) fyne.CanvasObject {
 // newSidebarGroupLabel is the accent group title in the sidebar (General / Sources / Library).
 func newSidebarGroupLabel(text string) fyne.CanvasObject {
 	l := newGroupLabel(text)
-	return container.New(&paddedLayout{x: 0, y: 0}, container.New(layout.NewCustomPaddedLayout(10, 0, 0, 0), l))
+	return container.New(&paddedLayout{x: 0, y: 0}, container.New(layout.NewCustomPaddedLayout(6, 0, 0, 0), l))
 }
 
 // --- Tappable rows -----------------------------------------------------------------------------
@@ -595,7 +597,7 @@ func (n *navItemWidget) CreateRenderer() fyne.WidgetRenderer {
 		label:  canvas.NewText(n.title, color.Black),
 		badge:  canvas.NewText("", color.Black),
 		dot:    canvas.NewCircle(color.Transparent),
-		height: 34,
+		height: 31,
 	}
 	r.icon.FillMode = canvas.ImageFillContain
 	r.Refresh()

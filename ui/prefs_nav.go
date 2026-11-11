@@ -48,7 +48,8 @@ type prefsNavView struct {
 	pageOrder []string          // top-level page IDs in sidebar order
 	current   string
 
-	pill *savePill
+	pill   *savePill
+	search *prefsSearch
 
 	refreshers []func() // dynamic titles and badges
 }
@@ -95,6 +96,7 @@ func newPrefsNavView(sm *SettingsManager, nav *schema.NavSchema, initial string)
 		}
 	}
 	sm.currentPage = ""
+	v.search.index = schema.BuildSearchIndex(nav)
 
 	sidebarBox := container.New(&tightVBoxLayout{overlap: 0}, sidebarObjs...)
 	sidebarScroll := container.NewVScroll(container.New(&paddedLayout{x: 10, y: 12}, sidebarBox))
@@ -151,6 +153,9 @@ func (v *prefsNavView) Select(id string) {
 	}
 	if id != v.current {
 		scrollPageToTop(page) // pages are built up front, so reset any old offset
+	}
+	if v.search != nil {
+		v.search.reset() // choosing a page ends any search in progress
 	}
 	v.current = id
 	v.content.Objects = []fyne.CanvasObject{page}
@@ -222,12 +227,10 @@ func pendingSummary(count int, pages []string) string {
 	return i18n.Tf("{{.Count}} unsaved changes on {{.Pages}}", map[string]any{"Count": count, "Pages": where})
 }
 
+// buildSearchField creates the sidebar search field (see prefs_search.go).
 func (v *prefsNavView) buildSearchField() fyne.CanvasObject {
-	// Placeholder until settings search lands (P6).
-	search := widget.NewEntry()
-	search.SetPlaceHolder(i18n.T("Search settings"))
-	search.ActionItem = widget.NewIcon(theme.SearchIcon())
-	return container.New(&paddedLayout{x: 0, y: 2}, search)
+	v.search = newPrefsSearch(v)
+	return container.New(&paddedLayout{x: 0, y: 2}, v.search.entry)
 }
 
 // --- Pages -------------------------------------------------------------------------------------

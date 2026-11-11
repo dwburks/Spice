@@ -256,6 +256,14 @@ type insetRowLayout struct {
 	flush bool              // left block has no inner text padding (buttons): align to rowPadX
 }
 
+// Child order of an inset row's container: search highlight, changed-dot, left block, control.
+const (
+	rowObjFlash = iota
+	rowObjDot
+	rowObjLeft
+	rowObjControl
+)
+
 func (l *insetRowLayout) padLeft() float32 {
 	if l.flush {
 		return rowPadX
@@ -269,10 +277,10 @@ func (l *insetRowLayout) padLeft() float32 {
 func rowInnerPad() float32 { return theme.InnerPadding() }
 
 func (l *insetRowLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
-	left := objects[1].MinSize()
+	left := objects[rowObjLeft].MinSize()
 	var right fyne.Size
-	if len(objects) > 2 && objects[2].Visible() {
-		right = objects[2].MinSize()
+	if len(objects) > rowObjControl && objects[rowObjControl].Visible() {
+		right = objects[rowObjControl].MinSize()
 	}
 	padLeft := l.padLeft()
 	w := padLeft + left.Width + rowPadX
@@ -291,12 +299,14 @@ func (l *insetRowLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 }
 
 func (l *insetRowLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
-	dot, left := objects[0], objects[1]
+	flash, dot, left := objects[rowObjFlash], objects[rowObjDot], objects[rowObjLeft]
+	flash.Move(fyne.NewPos(1, 1))
+	flash.Resize(fyne.NewSize(size.Width-2, size.Height-2))
 	padLeft := l.padLeft()
 	rightEdge := size.Width - rowPadX
 	leftW := rightEdge - padLeft
-	if len(objects) > 2 && objects[2].Visible() {
-		right := objects[2]
+	if len(objects) > rowObjControl && objects[rowObjControl].Visible() {
+		right := objects[rowObjControl]
 		rs := right.MinSize()
 		maxW := (size.Width - 2*rowPadX) * 0.62
 		if rs.Width > maxW {
@@ -367,6 +377,7 @@ type insetRow struct {
 	*fyne.Container
 	dot   *themedRect
 	label *widget.Label
+	flash *canvas.Rectangle // search-result highlight; transparent except while flashing
 }
 
 // newInsetRow builds a row from a label, optional help, optional status label and optional control.
@@ -395,7 +406,9 @@ func newInsetRowWithLeft(left fyne.CanvasObject, firstLine *widget.Label, contro
 	if firstLine != nil {
 		lineObj = firstLine
 	}
-	objs := []fyne.CanvasObject{dot, left}
+	flash := canvas.NewRectangle(color.Transparent)
+	flash.CornerRadius = 6
+	objs := []fyne.CanvasObject{flash, dot, left}
 	if control != nil {
 		objs = append(objs, control)
 	}
@@ -403,6 +416,7 @@ func newInsetRowWithLeft(left fyne.CanvasObject, firstLine *widget.Label, contro
 		Container: container.New(&insetRowLayout{label: lineObj}, objs...),
 		dot:       dot,
 		label:     firstLine,
+		flash:     flash,
 	}
 }
 

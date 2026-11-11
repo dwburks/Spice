@@ -116,6 +116,19 @@ func TestRenderPrefsScreenshots(t *testing.T) {
 		sm.prefsWindow.Resize(fyne.NewSize(960, 680)) // the default window size
 	})
 	render("app_light", theme.VariantLight, schema.NavPageApp, nil)
+
+	oldDebounce := searchDebounce
+	searchDebounce = 0 // results appear as soon as the query is typed
+	defer func() { searchDebounce = oldDebounce }()
+	typeSearch := func(q string) func(v *prefsNavView, sm *SettingsManager) {
+		return func(v *prefsNavView, sm *SettingsManager) {
+			sm.prefsWindow.Resize(fyne.NewSize(960, 680)) // the default window size
+			v.search.entry.SetText(q)
+		}
+	}
+	render("search_light", theme.VariantLight, schema.NavPageWallpaper, typeSearch("cache"))
+	render("search_dark", theme.VariantDark, schema.NavPageWallpaper, typeSearch("cache"))
+	render("search_empty_light", theme.VariantLight, schema.NavPageWallpaper, typeSearch("zzzz"))
 	render("pause_dark", theme.VariantDark, schema.NavPagePause, nil)
 }
 

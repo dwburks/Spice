@@ -128,8 +128,78 @@ func (sm *SettingsManager) renderSection(section schema.SectionSchema) fyne.Canv
 	return block
 }
 
-// renderItemRows renders a single schema item into card rows.
+// renderItemRows renders a single schema item into card rows and remembers the first row under
+// the item's name, so settings search can scroll to and highlight it.
 func (sm *SettingsManager) renderItemRows(item schema.ItemSchema) []fyne.CanvasObject {
+	rows := sm.renderItemRowsRaw(item)
+	if len(rows) > 0 {
+		for _, name := range itemRowNames(item) {
+			sm.noteRow(name, rows[0])
+		}
+	}
+	return rows
+}
+
+// itemRowNames returns the names an item's first row can be found under: the item's own name,
+// or every named child of a horizontal row.
+func itemRowNames(item schema.ItemSchema) []string {
+	switch v := item.(type) {
+	case schema.BoolItem:
+		return []string{v.Name}
+	case schema.TextItem:
+		return []string{v.Name}
+	case schema.SelectItem:
+		return []string{v.Name}
+	case schema.SliderItem:
+		return []string{v.Name}
+	case schema.ChoiceCardsItem:
+		return []string{v.Name}
+	case schema.AsyncButtonItem:
+		return []string{v.Name}
+	case schema.ConfirmButtonItem:
+		return []string{v.Name}
+	case schema.ButtonItem:
+		return []string{v.Name}
+	case schema.HyperlinkItem:
+		return []string{v.ID}
+	case schema.OAuthPickerItem:
+		return []string{v.Name}
+	case *schema.OAuthPickerItem:
+		return []string{v.Name}
+	case schema.FolderPickerItem:
+		return []string{v.Name}
+	case schema.AppPickerItem:
+		return []string{v.Name}
+	case schema.SecretItem:
+		return []string{v.Name}
+	case schema.HorizontalRowItem:
+		return horizontalRowNames(v)
+	case *schema.HorizontalRowItem:
+		return horizontalRowNames(*v)
+	}
+	return nil
+}
+
+func horizontalRowNames(row schema.HorizontalRowItem) []string {
+	var names []string
+	for _, child := range row.Items {
+		names = append(names, itemRowNames(child)...)
+	}
+	return names
+}
+
+// noteRow records the row to reveal for a setting name (the first row rendered wins).
+func (sm *SettingsManager) noteRow(name string, row fyne.CanvasObject) {
+	if name == "" || row == nil {
+		return
+	}
+	if _, ok := sm.rowOf[name]; !ok {
+		sm.rowOf[name] = row
+	}
+}
+
+// renderItemRowsRaw maps one schema item onto its rows.
+func (sm *SettingsManager) renderItemRowsRaw(item schema.ItemSchema) []fyne.CanvasObject {
 	switch v := item.(type) {
 	case *schema.OAuthPickerItem:
 		return sm.renderOAuthPickerRows(*v)
@@ -197,6 +267,7 @@ func (sm *SettingsManager) trackRow(name string, row *insetRow) {
 		return
 	}
 	sm.rowDots[name] = append(sm.rowDots[name], row.dot)
+	sm.noteRow(name, row.Container)
 	sm.notePage(name)
 }
 

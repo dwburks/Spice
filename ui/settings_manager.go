@@ -44,6 +44,7 @@ type SettingsManager struct {
 	afterSetHooks   map[string]func(interface{}) // Run after a programmatic SetValue (e.g. preset selects)
 	rowDots         map[string][]*themedRect     // Setting name -> its rows' "changed" dots
 	pageOf          map[string]string            // Setting name -> preferences page ID
+	rowOf           map[string]fyne.CanvasObject // Setting name -> its first rendered row (settings search)
 	currentPage     string                       // Page ID being rendered (set by the nav renderer)
 	dirtyObservers  []func()                     // Notified after dirty state changes (pill, sidebar dots)
 	pageTopInset    float32                      // Page padding used by RenderSchema
@@ -114,6 +115,7 @@ func NewSettingsManager(window fyne.Window) setting.SettingsManager {
 		afterSetHooks:       make(map[string]func(interface{})),
 		rowDots:             make(map[string][]*themedRect),
 		pageOf:              make(map[string]string),
+		rowOf:               make(map[string]fyne.CanvasObject),
 		liveInits:           make(map[string][]func()),
 	}
 

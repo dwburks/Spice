@@ -158,6 +158,54 @@ func ParseSmartFitMode(s string) SmartFitMode {
 	}
 }
 
+// MinImageSize decides how large an image must be, relative to a display, to be used on it.
+// The test is the cover-scale s = max(displayW/imageW, displayH/imageH): the factor the image
+// would be enlarged by to fill the display. Larger images are scaled down and cropped as usual.
+type MinImageSize int
+
+const (
+	MinImageSizeDisplay MinImageSize = 0 // At least display size: never enlarge (s <= 1.0). The default.
+	MinImageSizeSlight  MinImageSize = 1 // Allow slightly smaller: up to 80% of the display (s <= 1.25).
+	MinImageSizeAny     MinImageSize = 2 // Any size: no size check (the behavior before this setting existed).
+)
+
+// maxUpscaleSlight is the enlargement factor MinImageSizeSlight allows (1 / 0.8).
+const maxUpscaleSlight = 1.25
+
+func (m MinImageSize) String() string {
+	switch m {
+	case MinImageSizeDisplay:
+		return i18n.T("At least display size")
+	case MinImageSizeSlight:
+		return i18n.T("Allow slightly smaller")
+	case MinImageSizeAny:
+		return i18n.T("Any size")
+	default:
+		return i18n.T("Unknown")
+	}
+}
+
+// MaxUpscale returns the largest enlargement factor the mode allows; 0 means unlimited.
+func (m MinImageSize) MaxUpscale() float64 {
+	switch m {
+	case MinImageSizeDisplay:
+		return 1.0
+	case MinImageSizeSlight:
+		return maxUpscaleSlight
+	default:
+		return 0
+	}
+}
+
+// GetMinImageSizes returns the available minimum image size modes as display strings.
+func GetMinImageSizes() []string {
+	return []string{
+		MinImageSizeDisplay.String(),
+		MinImageSizeSlight.String(),
+		MinImageSizeAny.String(),
+	}
+}
+
 // GetConfig returns the singleton instance of Config.
 func GetConfig(p Preferences) *Config {
 	cfgOnce.Do(func() {
@@ -1220,6 +1268,27 @@ func (c *Config) SetSmartFitMode(mode SmartFitMode) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.SetInt(SmartFitModePrefKey, int(mode))
+}
+
+// SetMinImageSize sets the minimum image size mode.
+func (c *Config) SetMinImageSize(mode MinImageSize) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.SetInt(MinImageSizePrefKey, int(mode))
+}
+
+// GetMinImageSize returns the minimum image size mode; unset or out-of-range values give the default.
+func (c *Config) GetMinImageSize() MinImageSize {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.Preferences == nil {
+		return MinImageSizeDisplay
+	}
+	val := c.IntWithFallback(MinImageSizePrefKey, int(MinImageSizeDisplay))
+	if val < int(MinImageSizeDisplay) || val > int(MinImageSizeAny) {
+		return MinImageSizeDisplay
+	}
+	return MinImageSize(val)
 }
 
 func (c *Config) GetSmartFitMode() SmartFitMode {

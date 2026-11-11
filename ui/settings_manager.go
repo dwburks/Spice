@@ -52,6 +52,11 @@ type SettingsManager struct {
 	pageMaxWidth    float32
 	scrolls         []*container.Scroll // Rendered page scrolls (re-laid out when rows show/hide)
 
+	// Live (read-only, computed) items: the first computation of each waits for its page to be
+	// shown; runAsync runs the compute step (nil = a goroutine; tests make it synchronous).
+	liveInits map[string][]func()
+	runAsync  func(func())
+
 	// queueDialogs holds back dialogs requested while a brand-new preferences window is still
 	// being built (no content/size yet). Fyne permanently clamps an overlay shown on a not-yet-sized
 	// canvas to that tiny size, so CreatePreferencesWindow shows them via showQueuedDialogs() after Show().
@@ -109,6 +114,7 @@ func NewSettingsManager(window fyne.Window) setting.SettingsManager {
 		afterSetHooks:       make(map[string]func(interface{})),
 		rowDots:             make(map[string][]*themedRect),
 		pageOf:              make(map[string]string),
+		liveInits:           make(map[string][]func()),
 	}
 
 	sm.applyButton = createApplyButton(sm)

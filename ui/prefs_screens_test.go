@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"context"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -66,7 +68,9 @@ func TestRenderPrefsScreenshots(t *testing.T) {
 		defer w.Close()
 		sa.prefsWindow = w
 		sm := NewSettingsManager(w).(*SettingsManager)
+		sm.runAsync = func(f func()) { f() } // live items compute synchronously in the headless render
 		nav, _ := sa.buildPreferencesNav(sm, page)
+		stubSmartFitLiveItems(nav)
 		if item, _ := nav.FindItem(schema.NavPageWallpaper); item != nil {
 			item.Banner = &schema.BannerData{ImagePath: placeholder, ProviderName: "wallhaven"}
 		}
@@ -96,6 +100,20 @@ func TestRenderPrefsScreenshots(t *testing.T) {
 	})
 	render("frequency_custom_light", theme.VariantLight, schema.NavPageWallpaper, func(v *prefsNavView, sm *SettingsManager) {
 		sm.allWidgets["changeFrequency__preset"].(*widget.Select).SetSelected("Custom…")
+	})
+	render("smartfit_light", theme.VariantLight, schema.NavPageSmartFit, nil)
+	render("smartfit_dark", theme.VariantDark, schema.NavPageSmartFit, nil)
+	render("smartfit_staged_light", theme.VariantLight, schema.NavPageSmartFit, func(v *prefsNavView, sm *SettingsManager) {
+		sm.valueSetters["smartFitMode"](1) // as if the Quality card was clicked (the default is Flexibility)
+	})
+	render("smartfit_full_light", theme.VariantLight, schema.NavPageSmartFit, func(v *prefsNavView, sm *SettingsManager) {
+		sm.prefsWindow.Resize(fyne.NewSize(1000, 1500)) // the whole page, no scrolling
+	})
+	render("smartfit_full_dark", theme.VariantDark, schema.NavPageSmartFit, func(v *prefsNavView, sm *SettingsManager) {
+		sm.prefsWindow.Resize(fyne.NewSize(1000, 1500))
+	})
+	render("smartfit_960x680_light", theme.VariantLight, schema.NavPageSmartFit, func(v *prefsNavView, sm *SettingsManager) {
+		sm.prefsWindow.Resize(fyne.NewSize(960, 680)) // the default window size
 	})
 	render("app_light", theme.VariantLight, schema.NavPageApp, nil)
 	render("pause_dark", theme.VariantDark, schema.NavPagePause, nil)
@@ -140,4 +158,61 @@ func clamp8(v float64) uint8 {
 		return 255
 	}
 	return uint8(v)
+}
+
+// stubSmartFitLiveItems swaps the Smart fit page's computed items for fixtures so the screenshot
+// shows realistic content (the headless app has no displays or library). The real computations
+// are covered by tests in pkg/wallpaper.
+func stubSmartFitLiveItems(nav *schema.NavSchema) {
+	item, _ := nav.FindItem(schema.NavPageSmartFit)
+	if item == nil || item.Panel == nil {
+		return
+	}
+	for si := range item.Panel.Sections {
+		items := item.Panel.Sections[si].Items
+		for ii, it := range items {
+			switch v := it.(type) {
+			case schema.StatsItem:
+				v.Compute = func(_ context.Context, get func(string) interface{}) []schema.StatRow {
+					mode, _ := get("smartFitMode").(int)
+					shape, small := 40, 18
+					if mode == 0 {
+						shape = 0
+					}
+					return []schema.StatRow{
+						{Label: "Display 1 · 3440×1440", Value: fmt.Sprintf("%d fit · %d wrong shape · %d too small", 142+40-shape, shape, small)},
+						{Label: "Display 2 · 3440×1440", Value: fmt.Sprintf("%d fit · %d wrong shape · %d too small", 142+40-shape, shape, small)},
+						{Label: "12 images not measured yet", Muted: true},
+					}
+				}
+				items[ii] = v
+			case schema.PreviewStripItem:
+				v.Compute = func(_ context.Context, get func(string) interface{}) []schema.PreviewThumb {
+					orig := fixturePhoto(440, 293)
+					cur := fixturePhoto(440, 184)
+					return []schema.PreviewThumb{
+						{Caption: "Original", Sub: "Display 1 · 3440×1440", Image: orig},
+						{Caption: "Current", Sub: "Quality", Image: cur},
+						{Caption: "With your changes", Sub: "Flexibility", Image: fixturePhoto(440, 184)},
+					}
+				}
+				items[ii] = v
+			}
+		}
+	}
+}
+
+func fixturePhoto(w, h int) image.Image {
+	img := image.NewNRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		fy := float64(y) / float64(h)
+		for x := 0; x < w; x++ {
+			fx := float64(x) / float64(w)
+			r := 40 + 190*fy + 20*math.Sin(fx*6)
+			g := 50 + 90*fy*fy
+			b := 110 - 60*fy
+			img.SetNRGBA(x, y, color.NRGBA{R: clamp8(r), G: clamp8(g), B: clamp8(b), A: 0xFF})
+		}
+	}
+	return img
 }

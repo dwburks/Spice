@@ -169,19 +169,75 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 		}},
 		{page: schema.NavPageSmartFit, section: schema.SectionSchema{
 			ID:    "fit",
-			Title: i18n.T("Fit"),
+			Title: i18n.T("Fit mode"),
 			Items: []schema.ItemSchema{
-				schema.SelectItem{
-					Name:         "smartFitMode",
-					Label:        i18n.T("Smart fit mode"),
-					Help:         i18n.T("Disabled keeps the original image, Quality skips images that don't match your screen's shape, and Flexibility lets high-resolution images crop more."),
-					Options:      GetSmartFitModes(),
+				schema.ChoiceCardsItem{
+					Name: settingSmartFitMode,
+					Cards: []schema.ChoiceCard{
+						{
+							Title:        i18n.T("Off"),
+							Description:  i18n.T("Shows the original image. Your system letterboxes or stretches it."),
+							Illustration: schema.IllustrationNone,
+						},
+						{
+							Title:        SmartFitNormal.String(),
+							Description:  i18n.T("Crops only when the image's shape is close to your display's. On a 3440×1440 display, 16:9 and 16:10 fit; 4:3 and portrait are skipped."),
+							Illustration: schema.IllustrationQuality,
+						},
+						{
+							Title:        SmartFitAggressive.String(),
+							Description:  i18n.T("Larger images may crop more. On a 3440×1440 display, 4:3 fits, square fits from about 2125 px wide, and portrait is skipped."),
+							Illustration: schema.IllustrationFlexibility,
+						},
+					},
 					InitialValue: int(b.plugin.cfg.GetSmartFitMode()),
-					ApplyFunc: func(val interface{}) {
-						mode := SmartFitMode(val.(int))
-						b.plugin.cfg.SetSmartFitMode(mode)
+					ApplyFunc: func(val int) {
+						b.plugin.cfg.SetSmartFitMode(SmartFitMode(val))
 					},
 					NeedsRefresh: true,
+				},
+			},
+		}},
+		{page: schema.NavPageSmartFit, section: schema.SectionSchema{
+			ID:    "minsize",
+			Title: i18n.T("Minimum image size"),
+			Items: []schema.ItemSchema{
+				schema.SelectItem{
+					Name:         settingMinImageSize,
+					Label:        i18n.T("Image size"),
+					Help:         i18n.T("Smaller images are skipped instead of being stretched to fit."),
+					Options:      GetMinImageSizes(),
+					InitialValue: int(b.plugin.cfg.GetMinImageSize()),
+					ApplyFunc: func(val interface{}) {
+						b.plugin.cfg.SetMinImageSize(MinImageSize(val.(int)))
+					},
+					NeedsRefresh: true,
+				},
+			},
+		}},
+		{page: schema.NavPageSmartFit, section: schema.SectionSchema{
+			ID:          "library",
+			Title:       i18n.T("Your library"),
+			Description: i18n.T("How the images you already have sort for each display, with the settings above."),
+			Items: []schema.ItemSchema{
+				schema.StatsItem{
+					Name:        settingLibraryFit,
+					DependsOn:   []string{settingSmartFitMode, settingMinImageSize},
+					Compute:     b.plugin.LibraryFitRows,
+					Placeholder: i18n.T("No displays found."),
+				},
+			},
+		}},
+		{page: schema.NavPageSmartFit, section: schema.SectionSchema{
+			ID:          "preview",
+			Title:       i18n.T("Current wallpaper"),
+			Description: i18n.T("The image on your main display, as it is now and with the settings on this page."),
+			Items: []schema.ItemSchema{
+				schema.PreviewStripItem{
+					Name:        settingFitPreviewRow,
+					DependsOn:   []string{settingSmartFitMode, settingMinImageSize, settingFaceCrop, settingFaceBoost},
+					Compute:     b.plugin.FitPreviewThumbs,
+					Placeholder: i18n.T("No wallpaper is showing yet."),
 				},
 			},
 		}},
@@ -190,13 +246,13 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 			Title: i18n.T("Faces"),
 			Items: []schema.ItemSchema{
 				schema.BoolItem{
-					Name:         "faceCrop",
+					Name:         settingFaceCrop,
 					Label:        i18n.T("Face crop"),
-					Help:         i18n.T("Crops tightly around the largest face, which suits portraits."),
+					Help:         i18n.T("Frames tightly around the largest face."),
 					InitialValue: b.plugin.cfg.GetFaceCropEnabled(),
 					NeedsRefresh: true,
 					EnabledIf: func() bool {
-						val := b.sm.GetValue("smartFitMode")
+						val := b.sm.GetValue(settingSmartFitMode)
 						if val == nil {
 							return true
 						}
@@ -204,7 +260,7 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 					},
 					OnChanged: func(val bool) {
 						if val {
-							b.sm.SetValue("faceBoost", false)
+							b.sm.SetValue(settingFaceBoost, false)
 						}
 					},
 					ApplyFunc: func(val bool) {
@@ -215,13 +271,13 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 					},
 				},
 				schema.BoolItem{
-					Name:         "faceBoost",
+					Name:         settingFaceBoost,
 					Label:        i18n.T("Face boost"),
-					Help:         i18n.T("Keeps faces in frame while balancing the rest of the image."),
+					Help:         i18n.T("Moves the crop toward faces while keeping the rest of the picture balanced."),
 					InitialValue: b.plugin.cfg.GetFaceBoostEnabled(),
 					NeedsRefresh: true,
 					EnabledIf: func() bool {
-						val := b.sm.GetValue("smartFitMode")
+						val := b.sm.GetValue(settingSmartFitMode)
 						if val == nil {
 							return true
 						}
@@ -229,7 +285,7 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 					},
 					OnChanged: func(val bool) {
 						if val {
-							b.sm.SetValue("faceCrop", false)
+							b.sm.SetValue(settingFaceCrop, false)
 						}
 					},
 					ApplyFunc: func(val bool) {
@@ -238,6 +294,11 @@ func (b *PrefsPanelBuilder) buildGeneralSections() []generalSection {
 							b.plugin.cfg.SetFaceCropEnabled(false)
 						}
 					},
+				},
+				schema.LabelItem{
+					ID:         "facesNote",
+					Text:       i18n.T("Face settings only apply when Smart fit is on. They matter most when a lot of the image is cut away, such as tall images on wide displays or anything under Flexibility."),
+					Importance: schema.ImportanceLow,
 				},
 			},
 		}},
@@ -438,7 +499,7 @@ func (b *PrefsPanelBuilder) generalPageMeta() []schema.NavItem {
 		{
 			ID:          schema.NavPageSmartFit,
 			Title:       i18n.T("Smart fit"),
-			Description: i18n.T("How images are fitted and cropped to your screens."),
+			Description: i18n.T("How images are fitted, cropped and sized for your displays."),
 			IconName:    "fullscreen",
 			Order:       40,
 		},

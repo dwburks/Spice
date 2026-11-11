@@ -143,6 +143,12 @@ func (sm *SettingsManager) renderItemRows(item schema.ItemSchema) []fyne.CanvasO
 		return []fyne.CanvasObject{sm.renderSelectRow(v)}
 	case schema.SliderItem:
 		return []fyne.CanvasObject{sm.renderSliderRow(v)}
+	case schema.ChoiceCardsItem:
+		return sm.renderChoiceCardsRows(v)
+	case schema.StatsItem:
+		return sm.renderStatsRows(v)
+	case schema.PreviewStripItem:
+		return sm.renderPreviewRows(v)
 	case schema.AsyncButtonItem:
 		return []fyne.CanvasObject{sm.renderAsyncButtonRow(v)}
 	case schema.ConfirmButtonItem:
@@ -577,8 +583,7 @@ func isAddIcon(name string) bool {
 }
 
 func (sm *SettingsManager) renderConfirmButtonRow(v schema.ConfirmButtonItem) fyne.CanvasObject {
-	var button *widget.Button
-	button = sm.newSmallButton(v.ButtonText, sm.getIconResource(v.IconName), func() {
+	button := sm.newSmallButton(v.ButtonText, sm.getIconResource(v.IconName), func() {
 		if v.ConfirmTitle != "" && v.ConfirmMessage != "" {
 			d := dialog.NewConfirm(v.ConfirmTitle, v.ConfirmMessage, func(b bool) {
 				if b {

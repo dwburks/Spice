@@ -62,6 +62,8 @@ var allowIdenticalToEnglish = map[string]bool{
 	"Collections": true,
 	"Description": true,
 	"minutes":     true,
+	// Smart fit page: "Original" is the same word in German, Spanish, French and Portuguese
+	"Original": true,
 
 	// Brand names / tech terms kept in English
 	"Pexels":                  true,

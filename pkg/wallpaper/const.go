@@ -17,6 +17,7 @@ const (
 	pluginPrefix                     = pluginName + "_"
 	SmartFitPrefKey                  = pluginPrefix + "smart_fit_key"                   // SmartFitPrefKey is used to set and retrieve the boolean flag for wallpaper smart fit
 	SmartFitModePrefKey              = pluginPrefix + "smart_fit_mode_key"              // SmartFitModePrefKey is used to set and retrieve the int smart fit mode
+	MinImageSizePrefKey              = pluginPrefix + "min_image_size_key"              // MinImageSizePrefKey is used to set and retrieve the int minimum image size mode (0 = at least display size)
 	CacheSizePrefKey                 = pluginPrefix + "cache_size_key"                  // WallpaperCacheSizePrefKey is used to set and retrieve the int wallpaper cache size
 	WallpaperChgFreqPrefKey          = pluginPrefix + "wallpaper_chg_freq_key"          // Legacy enum key
 	WallpaperChgFreqMinsPrefKey      = pluginPrefix + "wallpaper_chg_freq_mins_key"     // New key for raw minutes

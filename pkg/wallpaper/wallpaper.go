@@ -1511,8 +1511,11 @@ func (wp *Plugin) syncStoreWithConfig() {
 // and Sync compares against it, so a fresh image always matches until a setting changes.
 func (wp *Plugin) processingFlags() map[string]bool {
 	mode := wp.cfg.GetSmartFitMode()
+	minSize := wp.cfg.GetMinImageSize()
 	return map[string]bool{
 		"SmartFit":       wp.cfg.GetSmartFit(),
+		"MinSizeDisplay": minSize == MinImageSizeDisplay, // size-rejection tags depend on this
+		"MinSizeSlight":  minSize == MinImageSizeSlight,
 		"FitFlexibility": mode == SmartFitAggressive,
 		"FitQuality":     mode == SmartFitNormal,
 		"FaceCrop":       wp.cfg.GetFaceCropEnabled(),

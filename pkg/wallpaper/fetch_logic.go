@@ -156,6 +156,11 @@ func (wp *Plugin) RefreshImagesAndPulse() {
 		// Robust Sync: Reconcile store and invalidate stale derivatives
 		wp.resyncStore()
 
+		// A setting that changes how images are processed (fit mode, minimum image size...)
+		// leaves images in rotation without derivatives. Re-fit them from their cached masters
+		// now, not only at the next startup. Local work, paced, a no-op when nothing is dormant.
+		go wp.restoreDormantImages(wp.ctx)
+
 		// Ensure tray menu is rebuilt (e.g. if Favorites was toggled)
 		if wp.manager != nil {
 			wp.manager.RebuildTrayMenu()
@@ -199,6 +204,14 @@ func (wp *Plugin) fetchFromProvider(fetchCtx context.Context, q ImageQuery, p pr
 
 	// Rate limit API calls via PacedProvider interface
 	// Pattern updated: Pacing penalty is now paid BEFORE grabbing the global semaphore in FetchNewImages.
+
+	// Hint providers that can filter by size (Wallhaven) with the smallest usable image. Applied
+	// to this request only: the stored query URL, and so its ID, never changes.
+	if sfp, ok := p.(provider.SizeFilteringProvider); ok && sfp.FiltersByMinResolution() {
+		if w, h, ok := wp.minResolutionFloor(); ok {
+			ctx = context.WithValue(ctx, provider.MinResolutionKey, provider.MinResolution{Width: w, Height: h})
+		}
+	}
 
 	images, err := p.FetchImages(ctx, q.URL, page)
 	if err != nil {
@@ -256,6 +269,14 @@ func (wp *Plugin) fetchFromProvider(fetchCtx context.Context, q ImageQuery, p pr
 
 		if !isFavRequest && wp.cfg.InAvoidSet(img.ID) {
 			log.Debugf("Skipping blocked image: %s", img.ID)
+			continue
+		}
+
+		// Too small for every connected display: skip before queueing or downloading anything.
+		// Not an error and not an empty page: the page still counts as productive, so
+		// pagination advances and Safe Page Wrapping does not trigger.
+		if wp.tooSmallForAllDisplays(img) {
+			log.Debugf("Skipping image %s: %dx%d is too small for every connected display.", img.ID, img.Width, img.Height)
 			continue
 		}
 

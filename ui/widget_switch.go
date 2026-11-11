@@ -183,6 +183,6 @@ func (r *switchRenderer) Destroy() {}
 // fadeColor returns c with its alpha scaled to a/255.
 func fadeColor(c color.Color, a uint8) color.Color {
 	n := color.NRGBAModel.Convert(c).(color.NRGBA)
-	n.A = uint8(uint16(n.A) * uint16(a) / 0xFF)
+	n.A = uint8(uint16(n.A) * uint16(a) / 0xFF) //nolint:gosec // G115: 255*255/255 always fits in a uint8
 	return n
 }

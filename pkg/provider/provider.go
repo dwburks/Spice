@@ -121,6 +121,16 @@ type ContextKey string
 const VirtualFramedKey ContextKey = "virtual_framed_result"
 const ProviderIDKey ContextKey = "provider_id"
 
+// MinResolutionKey carries a MinResolution through the context of FetchImages. It is a hint for
+// providers whose search API can filter by size; the app still checks every result itself.
+const MinResolutionKey ContextKey = "min_resolution"
+
+// MinResolution is the smallest width and height an image needs to be usable on at least one
+// connected display, given the user's Minimum image size setting.
+type MinResolution struct {
+	Width, Height int
+}
+
 // Image represents a generic wallpaper image.
 type Image struct {
 	ID               string
@@ -344,6 +354,13 @@ type ResolutionAwareProvider interface {
 	ImageProvider
 	// WithResolution returns a new API URL with resolution constraints added if they are missing.
 	WithResolution(apiURL string, width, height int) string
+}
+
+// SizeFilteringProvider is an optional interface for providers whose search API can filter by
+// minimum image size. Such providers read provider.MinResolutionKey from the FetchImages context.
+type SizeFilteringProvider interface {
+	ImageProvider
+	FiltersByMinResolution() bool
 }
 
 // HeaderProvider is an optional interface for providers that need custom headers for image downloads.

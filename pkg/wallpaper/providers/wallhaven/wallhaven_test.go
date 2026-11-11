@@ -138,9 +138,14 @@ func TestProvider_WithResolution(t *testing.T) {
 			expected: "https://wallhaven.cc/api/v1/search?q=anime&resolutions=1920x1080",
 		},
 		{
-			name:     "Existing ratios param",
+			name:     "Existing ratios param only fixes the shape, so the floor is still added",
 			inputURL: "https://wallhaven.cc/api/v1/search?q=anime&ratios=16x9",
-			expected: "https://wallhaven.cc/api/v1/search?q=anime&ratios=16x9",
+			expected: "https://wallhaven.cc/api/v1/search?atleast=1920x1080&q=anime&ratios=16x9",
+		},
+		{
+			name:     "Ratios with an explicit atleast keeps the user's atleast",
+			inputURL: "https://wallhaven.cc/api/v1/search?q=anime&ratios=16x9&atleast=2560x1440",
+			expected: "https://wallhaven.cc/api/v1/search?q=anime&ratios=16x9&atleast=2560x1440",
 		},
 	}
 
@@ -377,4 +382,70 @@ func TestProvider_CreateQueryPanel_EditConfig(t *testing.T) {
 	assert.Error(t, err)
 	q3, _ := cfg.GetQuery(id)
 	assert.Equal(t, q.URL, q3.URL)
+}
+
+func TestProvider_WithResolution_AnySizeAddsNothing(t *testing.T) {
+	app := fynetest.NewApp()
+	defer app.Quit()
+	cfg := wallpaper.GetConfig(app.Preferences())
+	cfg.SetMinImageSize(wallpaper.MinImageSizeAny)
+	p := NewProvider(cfg, &http.Client{})
+
+	in := "https://wallhaven.cc/api/v1/search?q=anime&ratios=16x9"
+	assert.Equal(t, in, p.WithResolution(in, 1920, 1080), "Any size must not add a size floor")
+
+	cfg.SetMinImageSize(wallpaper.MinImageSizeDisplay)
+	assert.Contains(t, p.WithResolution(in, 1920, 1080), "atleast=1920x1080")
+}
+
+// The size floor is applied to the request only: the stored query URL, and so the query ID derived
+// from it, never changes.
+func TestProvider_FetchImages_AppliesSizeFloorAtRequestTimeWithoutChangingTheQueryID(t *testing.T) {
+	var seen []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.URL.RawQuery)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"id":"a","path":"https://w.wallhaven.cc/full/a.jpg","dimension_x":3840,"dimension_y":2160}]}`))
+	}))
+	defer ts.Close()
+	client := &http.Client{Transport: &mockTransport{RoundTripFunc: func(req *http.Request) (*http.Response, error) {
+		u, _ := req.URL.Parse(ts.URL)
+		req.URL.Scheme, req.URL.Host = u.Scheme, u.Host
+		return http.DefaultTransport.RoundTrip(req)
+	}}}
+	p := NewProvider(&wallpaper.Config{}, client)
+	p.SetAPIKeyForTesting("k")
+
+	stored := "https://wallhaven.cc/api/v1/search?q=anime&ratios=16x9"
+	idBefore := wallpaper.GenerateQueryID(p.ID() + ":" + stored)
+
+	ctx := context.WithValue(context.Background(), provider.MinResolutionKey, provider.MinResolution{Width: 3440, Height: 1440})
+	images, err := p.FetchImages(ctx, stored, 1)
+	require.NoError(t, err)
+	require.Len(t, images, 1)
+	assert.Equal(t, 3840, images[0].Width, "search results carry the size the pre-download check uses")
+	assert.Equal(t, 2160, images[0].Height)
+
+	_, err = p.FetchImages(context.Background(), stored, 1)
+	require.NoError(t, err)
+	require.Len(t, seen, 2)
+	assert.Contains(t, seen[0], "atleast=3440x1440", "a ratios-only query gets the floor")
+	assert.NotContains(t, seen[1], "atleast", "no floor in the context, none on the request")
+
+	assert.Equal(t, idBefore, wallpaper.GenerateQueryID(p.ID()+":"+stored), "the stored URL, and so the query ID, is unchanged")
+
+	// A query that sets its own atleast or resolutions keeps it.
+	seen = nil
+	for _, own := range []string{"atleast=1000x1000", "resolutions=1920x1080"} {
+		_, err = p.FetchImages(ctx, "https://wallhaven.cc/api/v1/search?q=x&"+own, 1)
+		require.NoError(t, err)
+	}
+	assert.Contains(t, seen[0], "atleast=1000x1000")
+	assert.NotContains(t, seen[0], "3440x1440")
+	assert.NotContains(t, seen[1], "atleast")
+}
+
+func TestProvider_IsASizeFilteringProvider(t *testing.T) {
+	var _ provider.SizeFilteringProvider = &Provider{}
+	assert.True(t, (&Provider{}).FiltersByMinResolution())
 }

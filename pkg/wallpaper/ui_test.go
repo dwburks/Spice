@@ -206,6 +206,18 @@ func (m *MockSettingsManager) RenderSchema(panel schema.PanelSchema) fyne.Canvas
 					})
 				}
 				box.Add(sel)
+			case schema.ChoiceCardsItem:
+				// The mock stands a card group in with a select of the card titles.
+				titles := make([]string, len(v.Cards))
+				for i, c := range v.Cards {
+					titles[i] = c.Title
+				}
+				sel := widget.NewSelect(titles, nil)
+				if v.InitialValue >= 0 && v.InitialValue < len(titles) {
+					sel.SetSelected(titles[v.InitialValue])
+				}
+				m.allWidgets[v.Name] = sel
+				box.Add(sel)
 			case schema.ButtonItem:
 				btn := widget.NewButton(v.ButtonText, v.OnPressed)
 				m.allWidgets[v.Name] = btn

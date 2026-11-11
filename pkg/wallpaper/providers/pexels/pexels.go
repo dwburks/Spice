@@ -368,6 +368,8 @@ func (p *Provider) mapPexelsImage(photo PexelsPhoto) provider.Image {
 		Attribution: photo.Photographer,
 		Provider:    p.ID(),
 		FileType:    "image/jpeg", // Pexels primarily serves JPEGs
+		Width:       photo.Width,  // Size of the original file: lets too-small images be skipped before download
+		Height:      photo.Height,
 	}
 }
 

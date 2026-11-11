@@ -2,6 +2,7 @@ package schema
 
 import (
 	"context"
+	"image"
 	"net/url"
 	"time"
 )
@@ -118,6 +119,79 @@ type SelectItem struct {
 }
 
 func (SelectItem) isItemSchema() {}
+
+// Illustration names for ChoiceCard.Illustration. They select a small built-in drawing the
+// adapter renders; the schema carries no drawing code.
+const (
+	IllustrationNone        = "none"        // plain image, no crop
+	IllustrationQuality     = "quality"     // a crop that trims only a little
+	IllustrationFlexibility = "flexibility" // a crop that trims more
+)
+
+// ChoiceCard is one option of a ChoiceCardsItem.
+type ChoiceCard struct {
+	Title        string
+	Description  string
+	Illustration string // one of the Illustration* constants
+}
+
+// ChoiceCardsItem represents a single-choice setting shown as side-by-side selectable cards,
+// each with a title, an illustration and a short explanation. It stages and applies exactly like
+// a SelectItem: the selected index is the value, and nothing is written until ApplyFunc runs.
+type ChoiceCardsItem struct {
+	Name         string
+	Label        string // optional; the adapter shows it above the cards when set
+	Help         string // optional; shown under Label
+	Cards        []ChoiceCard
+	InitialValue int
+	OnChanged    func(int)
+	ApplyFunc    func(int)
+	NeedsRefresh bool
+	EnabledIf    func() bool
+	VisibleIf    func() bool
+}
+
+func (ChoiceCardsItem) isItemSchema() {}
+
+// StatRow is one line of a StatsItem. When Value is empty the row is a single muted note.
+type StatRow struct {
+	Label string
+	Value string
+	Muted bool
+}
+
+// StatsItem is a read-only list of lines computed from the current, possibly unsaved, values of
+// other settings. The adapter calls Compute off the UI thread whenever one of the DependsOn
+// settings changes (and once when the page is built), cancelling a call that is still running;
+// get returns a setting's staged value by name. Compute must not touch the UI.
+type StatsItem struct {
+	Name        string
+	DependsOn   []string
+	Compute     func(ctx context.Context, get func(name string) interface{}) []StatRow
+	Placeholder string // shown while computing and when Compute returns no rows
+}
+
+func (StatsItem) isItemSchema() {}
+
+// PreviewThumb is one picture of a PreviewStripItem. A nil Image is drawn as a placeholder
+// showing Note.
+type PreviewThumb struct {
+	Caption string
+	Sub     string // optional muted line under the caption
+	Image   image.Image
+	Note    string
+}
+
+// PreviewStripItem is a read-only row of thumbnails computed from the current, possibly unsaved,
+// values of other settings. It is computed like StatsItem (off the UI thread, cancellable).
+type PreviewStripItem struct {
+	Name        string
+	DependsOn   []string
+	Compute     func(ctx context.Context, get func(name string) interface{}) []PreviewThumb
+	Placeholder string // shown while computing and when Compute returns nothing
+}
+
+func (PreviewStripItem) isItemSchema() {}
 
 // SliderItem represents a slider control for numeric values.
 type SliderItem struct {

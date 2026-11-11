@@ -138,6 +138,7 @@ func (v *prefsNavView) Select(id string) {
 	v.current = id
 	v.content.Objects = []fyne.CanvasObject{page}
 	v.content.Refresh()
+	v.sm.notePageShown(id) // live items compute on first view
 	top := id
 	if p, ok := v.parentOf[id]; ok {
 		top = p
